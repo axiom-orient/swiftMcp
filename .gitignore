@@ -1,0 +1,32 @@
+# SwiftPM state and build products (recreated by `swift build` / `swift test`).
+.build/
+.swiftpm/
+/.verification/
+
+# Repository-local release and documentation build output.
+/Artifacts/
+.docc-build/
+
+# Xcode build, test, coverage, and per-user state. Keep project files and shared schemes tracked.
+DerivedData/
+*.xcresult/
+*.profraw
+*.profdata
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xccheckout
+**/*.xcscmblueprint
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Local machine state, secrets, and editor recovery files.
+.DS_Store
+.env
+.env.*
+!.env.example
+*.swp
+*.swo
+*~
