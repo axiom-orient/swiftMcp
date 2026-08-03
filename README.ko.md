@@ -80,21 +80,20 @@ targets: [
 ]
 ```
 
-### GitHub 공개 후
+### GitHub 패키지
 
-저장소를 GitHub에 올린 뒤 `<owner>`를 실제 소유자로 바꾸고, 실제로 존재하는 시맨틱 버전 태그를
-사용합니다.
+이 저장소의 SwiftPM 주소와 패키지 식별자는 다음과 같습니다.
 
 ```swift
 dependencies: [
   .package(
-    url: "https://github.com/<owner>/swift-mcp-sdk.git",
+    url: "https://github.com/axiom-orient/swiftMcp.git",
     from: "0.1.0"
   )
 ]
 ```
 
-`from: "0.1.0"`은 예시입니다. 게시할 때 만든 tag로 바꿔야 합니다.
+SwiftPM 의존성에서 product를 지정할 때 패키지 식별자는 `swiftmcp`입니다.
 
 ## 최소 stdio 서버
 
@@ -146,9 +145,13 @@ import Foundation
 import MCP
 import MCPStdioClient
 
+guard let serverPath = ProcessInfo.processInfo.environment["MCP_SERVER_PATH"] else {
+  fatalError("MCP_SERVER_PATH에 MCP 서버 실행 파일 경로를 지정하세요.")
+}
+
 let transport = MCPStdioClientTransport(
   configuration: try MCPStdioClientConfiguration(
-    executableURL: URL(fileURLWithPath: "/absolute/path/to/mcp-server")
+    executableURL: URL(fileURLWithPath: serverPath)
   )
 )
 let client = try MCPClient(
@@ -173,7 +176,7 @@ import MCPHTTPClient
 
 let transport = MCPHTTPClientTransport(
   configuration: try MCPHTTPClientConfiguration(
-    endpoint: URL(string: "https://example.com/mcp")!
+    endpoint: URL(string: "http://127.0.0.1:8080/mcp")!
   )
 )
 let client = try MCPClient(
@@ -227,21 +230,21 @@ GitHub Actions도 같은 gate를 macOS 14에서 실행합니다. `.build`, `.swi
    README, `LICENSE`를 배포 입력으로 검토해 커밋합니다. 저장소 운영 파일은 공개 여부를 따로
    결정합니다.
 3. GitHub Actions의 push·pull request 검증이 통과한 뒤 시맨틱 버전 태그를 만듭니다.
-4. 태그의 SwiftPM 설치 예시와 실제 GitHub URL이 README의 자리표시자와 일치하는지 확인합니다.
+4. SwiftPM 설치 주소가 `https://github.com/axiom-orient/swiftMcp.git`, 태그가 `0.1.0`인지 확인합니다.
 5. 문제가 생기면 해당 태그의 배포를 중단하고, 마지막으로 검증된 태그를 기준으로 복구합니다.
 
-GitHub 저장소를 만든 뒤에는 실제 소유자와 태그를 확인한 다음 아래처럼 연결합니다.
+이 저장소를 새 체크아웃에서 연결하려면 아래 명령을 사용합니다.
 
 ```bash
 git add Package.swift Sources Tests Scripts .github .gitignore .swift-format README.md README.ko.md LICENSE
 git commit -m "Initial SwiftMCP release"
-git remote add origin https://github.com/<owner>/swift-mcp-sdk.git
+git remote add origin https://github.com/axiom-orient/swiftMcp.git
 git push -u origin main
 git tag -a 0.1.0 -m "SwiftMCP 0.1.0"
 git push origin 0.1.0
 ```
 
-위 명령의 `<owner>`와 `0.1.0`은 예시입니다. 원격 저장소와 태그를 실제 값으로 바꿔야 합니다.
+태그 `0.1.0`은 이 저장소의 첫 공개 버전입니다.
 
 ## 라이선스
 

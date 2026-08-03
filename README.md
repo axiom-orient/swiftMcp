@@ -13,11 +13,11 @@ SwiftMCP is a Swift Package with no external SwiftPM dependencies. It declares m
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/<owner>/swift-mcp-sdk.git", from: "0.1.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.0")
 ]
 ```
 
-Replace `<owner>` and `0.1.0` with the published repository owner and an existing release tag.
+The published package identity is `swiftmcp` and the first release tag is `0.1.0`.
 
 For a local checkout:
 
@@ -89,9 +89,13 @@ import Foundation
 import MCP
 import MCPStdioClient
 
+guard let serverPath = ProcessInfo.processInfo.environment["MCP_SERVER_PATH"] else {
+  fatalError("Set MCP_SERVER_PATH to the MCP server executable.")
+}
+
 let transport = MCPStdioClientTransport(
   configuration: try MCPStdioClientConfiguration(
-    executableURL: URL(fileURLWithPath: "/absolute/path/to/mcp-server")
+    executableURL: URL(fileURLWithPath: serverPath)
   )
 )
 let client = try MCPClient(
@@ -107,9 +111,9 @@ print(tools.tools.map(\.name))
 await transport.shutdown()
 ```
 
-For HTTP, replace the transport with `MCPHTTPClientTransport` and an
-`MCPHTTPClientConfiguration(endpoint:)`. The client sends each request as a POST and accepts either a
-single JSON response or a request-scoped SSE stream.
+For a local server listening at `http://127.0.0.1:8080/mcp`, replace the transport with
+`MCPHTTPClientTransport` and use `MCPHTTPClientConfiguration(endpoint:)`. The client sends each request
+as a POST and accepts either a single JSON response or a request-scoped SSE stream.
 
 ## HTTP deployment
 
@@ -136,14 +140,14 @@ macOS 14.
 
 Do not commit `.build`, `.swiftpm`, `.verification`, or `Artifacts`.
 
-For a first GitHub publication, review and commit `Package.swift`, `Sources/`, `Tests/`, `Scripts/`,
-`.github/`, `.gitignore`, `.swift-format`, both README files, and `LICENSE`. Add the remote and push a
-real tag only after replacing the placeholders with the actual repository owner and release version:
+For this repository, review and commit `Package.swift`, `Sources/`, `Tests/`, `Scripts/`, `.github/`,
+`.gitignore`, `.swift-format`, both README files, and `LICENSE`. The published remote and release tag are
+`axiom-orient/swiftMcp` and `0.1.0`:
 
 ```bash
 git add Package.swift Sources Tests Scripts .github .gitignore .swift-format README.md README.ko.md LICENSE
 git commit -m "Initial SwiftMCP release"
-git remote add origin https://github.com/<owner>/swift-mcp-sdk.git
+git remote add origin https://github.com/axiom-orient/swiftMcp.git
 git push -u origin main
 git tag -a 0.1.0 -m "SwiftMCP 0.1.0"
 git push origin 0.1.0
