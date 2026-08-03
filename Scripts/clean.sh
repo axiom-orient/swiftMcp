@@ -7,9 +7,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
   exit 1
 }
 
-# SwiftPM and release outputs are reproducible from the source inputs. Finder metadata is local
-# machine state and must not become an input to a build or release.
-rm -rf .build .swiftpm .verification Artifacts
+# Repository-local verification outputs are reproducible from source inputs. `.build` and
+# `.swiftpm` are shared workspace state and are deliberately not removed by this script.
+rm -rf -- .verification Artifacts .docc-build
 find . -name .DS_Store -type f -delete
 
 printf 'PASS clean source tree\n'

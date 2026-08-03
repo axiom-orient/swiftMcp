@@ -46,15 +46,12 @@ final class MCPWireTests: XCTestCase {
     }
   }
 
-  func testMissingResultTypeIsInterpretedAsCompleteForPeerResults() throws {
-    let message = try MCPWireMessage.decode(
-      Data(#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#.utf8)
-    )
-    guard case .result(let result) = message else {
-      return XCTFail("expected result")
+  func testMissingResultTypeIsRejectedInTheStrictStatelessProfile() {
+    XCTAssertThrowsError(
+      try MCPWireMessage.decode(Data(#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#.utf8))
+    ) { error in
+      XCTAssertEqual(error as? MCPWireError, .missingResultType)
     }
-    XCTAssertEqual(result.resultType, .complete)
-    XCTAssertEqual(result.value["resultType"], .string("complete"))
   }
 
   func testResponseRequiresIDAndIntegerErrorCode() {

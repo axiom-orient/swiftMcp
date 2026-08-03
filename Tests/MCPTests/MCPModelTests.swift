@@ -49,6 +49,39 @@ final class MCPModelTests: XCTestCase {
     XCTAssertThrowsError(try MCPDiscoverResult(json: .object(negativeTTL)))
   }
 
+  func testSchemaIntegerFieldsPreserveLargeValuesWithoutAcceptingFractions() throws {
+    let large = try MCPJSONNumber(rawValue: "184467440737095516160000")
+    let fractional = try MCPJSONNumber(rawValue: "1.5")
+    let negative = try MCPJSONNumber(rawValue: "-1")
+
+    let cache = try MCPCachePolicy(ttlMilliseconds: large, scope: .public)
+    let discovery = try MCPDiscoverResult(
+      capabilities: MCPServerCapabilities(),
+      cache: cache
+    )
+    XCTAssertEqual(discovery.json.objectValue?["ttlMs"], .number(large))
+    XCTAssertEqual(try MCPDiscoverResult(json: discovery.json).cache, cache)
+
+    let resource = try MCPResource(uri: "file:///tmp/large", name: "large", size: large)
+    XCTAssertEqual(try MCPResource(json: resource.json).size, large)
+    let link = try MCPResourceLinkContent(uri: "file:///tmp/large", name: "large", size: large)
+    XCTAssertEqual(try MCPResourceLinkContent(json: link.json).size, large)
+    let completion = try MCPCompletion(values: ["large"], total: large)
+    XCTAssertEqual(try MCPCompletion(json: completion.json).total, large)
+
+    // The official schema specifies `integer` for resource size and completion total, without a
+    // minimum. Preserve valid peer values rather than adding a narrower Swift-only range.
+    XCTAssertEqual(
+      try MCPResource(uri: "file:///tmp/negative", name: "negative", size: negative).size, negative)
+    XCTAssertEqual(try MCPCompletion(values: [], total: negative).total, negative)
+
+    XCTAssertThrowsError(try MCPCachePolicy(ttlMilliseconds: fractional, scope: .public))
+    XCTAssertThrowsError(try MCPCachePolicy(ttlMilliseconds: negative, scope: .public))
+    XCTAssertThrowsError(
+      try MCPResource(uri: "file:///tmp/fraction", name: "fraction", size: fractional))
+    XCTAssertThrowsError(try MCPCompletion(values: [], total: fractional))
+  }
+
   func testContentBlocksRoundTripWithoutSemanticConversion() throws {
     let annotations = try MCPAnnotations(
       audience: [.user],
@@ -301,13 +334,11 @@ final class MCPModelTests: XCTestCase {
       try MCPIcon(source: "https://example.com/icon.png", theme: "high-contrast"))
   }
 
-  func testPeerOperationResultWithoutResultTypeDefaultsToComplete() throws {
+  func testOperationResultWithoutResultTypeIsRejectedInTheStrictStatelessProfile() {
     let input: MCPJSONValue = .object([
       "content": .array([MCPContentBlock.text(MCPTextContent(text: "hello")).json])
     ])
-    let result = try MCPCallToolResult(json: input)
-    XCTAssertEqual(result.resultType, .complete)
-    XCTAssertEqual(result.content.count, 1)
+    XCTAssertThrowsError(try MCPCallToolResult(json: input))
   }
 
   func testIconSourceRejectsSchemesOutsideHTTPSAndData() throws {

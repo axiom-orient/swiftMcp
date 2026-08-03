@@ -826,7 +826,7 @@ private struct MCPJSONSchemaCompiler {
       isRoot: true
     )
     guard issues.isEmpty else { return }
-    try inspectReferencedCompatibilitySchemas()
+    try inspectReferencedAlternateDialectSchemas()
     guard issues.isEmpty else { return }
     let compiled = MCPCompiledReferenceView(
       root: root,
@@ -1207,15 +1207,15 @@ private struct MCPJSONSchemaCompiler {
   /// `definitions` and `$defs` are annotations in the opposite dialect, but local JSON Pointers
   /// can still target them. Inspect only the concrete referenced schema after the normal traversal
   /// is complete. New references discovered in that schema are processed in turn, so compilation
-  /// does not depend on object-key order and unrelated compatibility-map siblings stay inert.
-  private mutating func inspectReferencedCompatibilitySchemas() throws {
+  /// does not depend on object-key order and unrelated cross-dialect map siblings stay inert.
+  private mutating func inspectReferencedAlternateDialectSchemas() throws {
     var nextReference = 0
     var inspectedTargets = Set<String>()
     while nextReference < references.count {
       let reference = references[nextReference]
       nextReference += 1
       guard reference.keyword == "$ref",
-        let target = compatibilityReferenceTarget(for: reference),
+        let target = alternateDialectReferenceTarget(for: reference),
         inspectedTargets.insert(target.schema.location).inserted
       else { continue }
       guard target.schema.value.isSchema else {
@@ -1231,7 +1231,7 @@ private struct MCPJSONSchemaCompiler {
     }
   }
 
-  private func compatibilityReferenceTarget(
+  private func alternateDialectReferenceTarget(
     for reference: Reference
   ) -> (schema: MCPResolvedJSONSchema, depth: Int)? {
     guard reference.resourceIdentifier == rootIdentifier, reference.value.hasPrefix("#/") else {
@@ -1239,7 +1239,7 @@ private struct MCPJSONSchemaCompiler {
     }
     let pointer = String(reference.value.dropFirst())
     let components = pointer.split(separator: "/", omittingEmptySubsequences: false)
-    let compatibilityKeyword =
+    let alternateDialectKeyword =
       switch dialect {
       case .draft202012: "definitions"
       case .draft7: "$defs"
@@ -1247,11 +1247,11 @@ private struct MCPJSONSchemaCompiler {
     guard
       components.dropLast().contains(where: {
         $0.replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~")
-          == compatibilityKeyword
+          == alternateDialectKeyword
       }), let value = root.value(atJSONPointer: pointer)
     else { return nil }
     // The pointer also gives a conservative lower bound for the schema's nesting level. This
-    // prevents a deeply nested compatibility branch from bypassing the schema-depth resource cap.
+    // preserves the schema-depth resource cap for deeply nested alternate-dialect branches.
     return (
       MCPResolvedJSONSchema(
         value: value,

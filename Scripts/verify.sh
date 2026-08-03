@@ -22,17 +22,26 @@ fi
   exit 1
 }
 
+# Verification must not read, replace, or delete a shared repository `.build`. A caller may
+# provide a reusable scratch path; otherwise this script owns and removes only the directory it
+# creates under the platform temporary directory.
+VERIFY_SCRATCH_PATH="${SWIFTMCP_VERIFY_SCRATCH_PATH:-}"
+VERIFY_OWNS_SCRATCH=false
+if [[ -z "$VERIFY_SCRATCH_PATH" ]]; then
+  VERIFY_SCRATCH_PATH="$(mktemp -d -t swiftmcp-verify 2>/dev/null || mktemp -d)"
+  VERIFY_OWNS_SCRATCH=true
+fi
+if [[ "$VERIFY_OWNS_SCRATCH" == true ]]; then
+  trap 'rm -rf -- "$VERIFY_SCRATCH_PATH"' EXIT
+fi
+
 printf '\n== repository contract ==\n'
-[[ ! -d .build && ! -d .swiftpm && ! -d .verification ]] || {
-  echo 'FAIL run ./Scripts/clean.sh before verification' >&2
-  exit 1
-}
 grep -q '// swift-tools-version: 6.2' Package.swift
 grep -q '.swiftLanguageMode(.v6)' Package.swift
 grep -q 'swiftLanguageModes: \[.v6\]' Package.swift
 ! grep -q '\.package(' Package.swift
 ! test -e Package.resolved
-printf 'PASS clean, self-contained SwiftPM package\n'
+printf 'PASS self-contained SwiftPM package\n'
 
 printf '\n== strict protocol surface ==\n'
 python3 - <<'PY'
@@ -56,21 +65,44 @@ for label, pattern in {
 print("PASS strict-only production surface")
 PY
 
+printf '\n== distribution hygiene ==\n'
+python3 - <<'PY'
+import pathlib
+import re
+
+root = pathlib.Path.cwd()
+paths = [root / "Package.swift", root / "README.md", root / "README.ko.md"]
+paths += sorted((root / "Sources").rglob("*"))
+paths += sorted((root / "Scripts").rglob("*"))
+paths += sorted((root / ".github").rglob("*"))
+for path in paths:
+    if not path.is_file() or path.suffix not in {"", ".swift", ".c", ".h", ".md", ".sh", ".yml"}:
+        continue
+    text = path.read_text(encoding="utf-8")
+    for label, pattern in {
+        "personal absolute path": r"/(?:Users|home)/",
+        "fixed repository build-product path": r"\.build/(?:debug|release)/",
+    }.items():
+        assert re.search(pattern, text) is None, f"{label}: {path.relative_to(root)}"
+
+print("PASS portable distribution inputs")
+PY
+
 printf '\n== format lint ==\n'
 # --strict turns lint warnings into a non-zero exit; without it the gate passes while
 # swift-format still reports diagnostics.
 "${SWIFT_FORMAT_CMD[@]}" lint --strict --recursive Package.swift Sources Tests
 
 printf '\n== debug build ==\n'
-swift build --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
+swift build --scratch-path "$VERIFY_SCRATCH_PATH" --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
 
 printf '\n== tests ==\n'
-swift test --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
+swift test --scratch-path "$VERIFY_SCRATCH_PATH" --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
 
 printf '\n== release build ==\n'
-swift build -c release --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
+swift build --scratch-path "$VERIFY_SCRATCH_PATH" -c release --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
 
-BIN_PATH="$(swift build --show-bin-path)"
+BIN_PATH="$(swift build --scratch-path "$VERIFY_SCRATCH_PATH" --show-bin-path)"
 
 printf '\n== stdio conformance smoke ==\n'
 CONFORMANCE_OUTPUT="$("$BIN_PATH/mcp-conformance-client" "$BIN_PATH/mcp-conformance-server")"

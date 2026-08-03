@@ -108,7 +108,9 @@ private actor MCPStdioClientRuntime {
     guard pending[request.id] == nil else {
       throw MCPStdioError.duplicateRequestID(request.id.description)
     }
-    guard let writer else { throw MCPStdioError.processNotRunning }
+    guard let writer, let activeProcessBox = processBox else {
+      throw MCPStdioError.processNotRunning
+    }
     let metadata = try MCPRequestMetadata.extract(from: request.params)
     let pair = AsyncThrowingStream<MCPWireMessage, Error>.makeStream(
       bufferingPolicy: .bufferingNewest(4_096))
@@ -129,11 +131,16 @@ private actor MCPStdioClientRuntime {
       // on-cancel path already retired this writer. Route that race through the same teardown.
       try Task.checkCancellation()
     } catch {
-      let reportedError: Error = Task.isCancelled ? CancellationError() : error
+      let reportedError: Error
+      if Task.isCancelled {
+        reportedError = CancellationError()
+      } else {
+        reportedError = await normalizedWriteFailure(error, processBox: activeProcessBox)
+      }
       pending.removeValue(forKey: request.id)?.continuation.finish(throwing: reportedError)
       // A failed or cancelled frame may already be partially present on the byte stream. Tear the
       // channel down before it can be reused or accumulate more writes behind the failed frame.
-      await shutdown()
+      await failConnection(reportedError)
       throw reportedError
     }
     return MCPClientExchange(
@@ -436,18 +443,34 @@ private actor MCPStdioClientRuntime {
     processExitStatus = status
   }
 
+  private func normalizedWriteFailure(_ error: Error, processBox: MCPProcessBox) async -> Error {
+    if let status = await observedProcessExitStatus(processBox: processBox) {
+      return MCPStdioError.processExited(status: status)
+    }
+    return error
+  }
+
+  private func observedProcessExitStatus(processBox: MCPProcessBox? = nil) async -> Int32? {
+    if let processExitStatus { return processExitStatus }
+    guard let process = processBox?.process ?? self.processBox?.process else { return nil }
+    if process.isRunning {
+      // Foundation can report pipe EOF or EPIPE a scheduling turn before its termination handler
+      // is delivered. Give the direct child one bounded turn so the exit status wins when present.
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    guard !process.isRunning else { return nil }
+    process.waitUntilExit()
+    return process.terminationStatus
+  }
+
   private func outputEnded(generation: UInt64, error: Error?) async {
     guard generation == self.generation else { return }
-    let observedExitStatus: Int32? = {
-      if let processExitStatus { return processExitStatus }
-      guard let process = processBox?.process, !process.isRunning else { return nil }
-      return process.terminationStatus
-    }()
+    let observedExitStatus = await observedProcessExitStatus()
     let failure: Error
-    if let error {
-      failure = error
-    } else if let observedExitStatus, !pending.isEmpty {
+    if let observedExitStatus, !pending.isEmpty {
       failure = MCPStdioError.processExited(status: observedExitStatus)
+    } else if let error {
+      failure = error
     } else if !pending.isEmpty {
       failure = MCPStdioError.io("stdout closed before pending requests completed")
     } else {

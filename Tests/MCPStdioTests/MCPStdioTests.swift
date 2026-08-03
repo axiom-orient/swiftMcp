@@ -25,12 +25,14 @@ final class MCPStdioTests: XCTestCase {
       }
       return url
     }
-    let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-    let direct = root.appendingPathComponent(".build/debug/mcp-conformance-server")
-    guard FileManager.default.isExecutableFile(atPath: direct.path) else {
-      throw XCTSkip("run swift build before tests to build mcp-conformance-server")
-    }
-    return direct
+    // SwiftPM may use a caller-provided scratch path. The conformance server is a sibling product
+    // of the XCTest bundle, so this works without assuming a repository-local build directory.
+    let candidate = Bundle(for: Self.self)
+      .bundleURL
+      .deletingLastPathComponent()
+      .appendingPathComponent("mcp-conformance-server")
+    if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+    throw XCTSkip("build mcp-conformance-server or set MCP_CONFORMANCE_SERVER_PATH")
   }
 
   private func makeClient(
@@ -526,23 +528,25 @@ final class MCPStdioTests: XCTestCase {
     await transport.shutdown()
   }
 
-  func testUnexpectedChildExitIsSurfaced() async throws {
+  func testUnexpectedChildExitIsReportedWithItsExitStatus() async throws {
     let shell = URL(fileURLWithPath: "/bin/sh")
-    let (client, transport) = try makeClient(
-      executable: shell,
-      arguments: ["-c", "exit 7"],
-      timeout: .seconds(2)
-    )
-    defer { Task { await transport.shutdown() } }
-
-    do {
-      _ = try await client.discover()
-      XCTFail("expected process exit")
-    } catch let error as MCPClientError {
-      guard case .transport(let message) = error else {
-        return XCTFail("unexpected error \(error)")
+    for _ in 0..<25 {
+      let (client, transport) = try makeClient(
+        executable: shell,
+        arguments: ["-c", "exit 7"],
+        timeout: .seconds(2)
+      )
+      do {
+        _ = try await client.discover()
+        XCTFail("expected process exit")
+      } catch let error as MCPClientError {
+        guard case .transport(let message) = error else {
+          await transport.shutdown()
+          return XCTFail("unexpected error \(error)")
+        }
+        XCTAssertTrue(message.contains("status 7"), message)
       }
-      XCTAssertTrue(message.contains("status 7") || message.contains("stdout closed"))
+      await transport.shutdown()
     }
   }
 

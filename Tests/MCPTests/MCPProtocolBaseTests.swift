@@ -141,6 +141,12 @@ final class MCPProtocolBaseTests: XCTestCase {
 
     XCTAssertThrowsError(
       try MCPClientCapabilities(additionalCapabilities: ["elicitation": .object([:])]))
+    XCTAssertThrowsError(
+      try MCPClientCapabilities(additionalCapabilities: ["roots": .object([:])]))
+    XCTAssertThrowsError(
+      try MCPClientCapabilities(additionalCapabilities: ["sampling": .object([:])]))
+    XCTAssertThrowsError(
+      try MCPServerCapabilities(additionalCapabilities: ["logging": .object([:])]))
 
     let experimental: [String: MCPJSONValue] = ["com.example/feature": .object(["v": .integer(1)])]
     XCTAssertEqual(

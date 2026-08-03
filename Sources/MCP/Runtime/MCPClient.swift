@@ -1598,7 +1598,7 @@ public struct MCPClient: Sendable {
       params["inputResponses"] == nil, params["requestState"] == nil,
       result["resultType"] == .string("complete"),
       let policy = try mcpCachePolicy(from: result),
-      policy.ttlMilliseconds > 0
+      policy.ttlMilliseconds.compare(to: MCPJSONNumber(0)) == .orderedDescending
     else { return }
 
     let partition: String?
@@ -1630,7 +1630,7 @@ public struct MCPClient: Sendable {
       authorizationPartition: partition,
       resourceURI: cacheResourceURI(descriptor: descriptor, params: params)
     )
-    let expiresAt = Date().addingTimeInterval(Double(policy.ttlMilliseconds) / 1_000)
+    let expiresAt = cacheExpiration(for: policy.ttlMilliseconds)
     guard let writeLease = await cacheEpochs.beginWrite(expectedEpoch: expectedEpoch) else {
       return
     }
@@ -1656,6 +1656,17 @@ public struct MCPClient: Sendable {
       }
     }
     await cacheEpochs.finishWrite(writeLease)
+  }
+
+  private func cacheExpiration(for ttlMilliseconds: MCPJSONNumber) -> Date {
+    // JSON Schema integers are not limited to Int64. Preserve a valid, very large wire value
+    // and treat it as the latest representable cache expiry rather than narrowing or rejecting it.
+    guard let milliseconds = ttlMilliseconds.doubleValue else { return .distantFuture }
+    let seconds = milliseconds / 1_000
+    guard seconds.isFinite, seconds < Date.distantFuture.timeIntervalSinceNow else {
+      return .distantFuture
+    }
+    return Date().addingTimeInterval(seconds)
   }
 
   private func cacheInvalidation(

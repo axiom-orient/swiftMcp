@@ -305,7 +305,8 @@ public struct MCPClientCapabilities: Sendable, Hashable, MCPJSONModel {
   public var elicitation: MCPElicitationCapabilities?
   public var experimental: [String: MCPJSONValue]
   public var extensions: [String: MCPJSONValue]
-  /// Known deprecated and future capability entries preserved without interpretation.
+  /// Future extension fields. Known but unimplemented standard capabilities are not accepted
+  /// for locally constructed outbound metadata.
   public var additionalCapabilities: [String: MCPJSONValue]
 
   public init(
@@ -318,7 +319,7 @@ public struct MCPClientCapabilities: Sendable, Hashable, MCPJSONModel {
     try MCPProtocolValidation.validateExtensions(extensions)
     try MCPProtocolValidation.validateAdditionalCapabilities(
       additionalCapabilities,
-      knownKeys: ["elicitation", "experimental", "extensions"]
+      knownKeys: ["elicitation", "experimental", "extensions", "roots", "sampling"]
     )
     self.elicitation = elicitation
     self.experimental = experimental
@@ -358,7 +359,8 @@ public struct MCPServerCapabilities: Sendable, Hashable, MCPJSONModel {
   public var completions: Bool
   public var experimental: [String: MCPJSONValue]
   public var extensions: [String: MCPJSONValue]
-  /// Known deprecated and future capability entries preserved without interpretation.
+  /// Future extension fields. Legacy standard capability names are not accepted for local
+  /// outbound advertisements.
   public var additionalCapabilities: [String: MCPJSONValue]
 
   public init(
@@ -378,7 +380,9 @@ public struct MCPServerCapabilities: Sendable, Hashable, MCPJSONModel {
     try MCPProtocolValidation.validateExtensions(extensions)
     try MCPProtocolValidation.validateAdditionalCapabilities(
       additionalCapabilities,
-      knownKeys: ["tools", "prompts", "resources", "completions", "experimental", "extensions"]
+      knownKeys: [
+        "tools", "prompts", "resources", "completions", "experimental", "extensions", "logging",
+      ]
     )
     guard tools || !toolListChanged else {
       throw MCPJSONError.invalidField(

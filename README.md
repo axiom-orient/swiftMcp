@@ -1,15 +1,32 @@
 # SwiftMCP
 
-Swift 6.2+ SDK for the official [MCP `2026-07-28` specification](https://modelcontextprotocol.io/specification/2026-07-28)
-and [schema reference](https://modelcontextprotocol.io/specification/2026-07-28/schema).
-SwiftMCP implements one strict stateless profile for typed MCP servers and clients.
+Swift 6.2+ SDK for the official [Model Context Protocol (MCP) `2026-07-28`
+specification](https://modelcontextprotocol.io/specification/2026-07-28) and its
+[schema reference](https://modelcontextprotocol.io/specification/2026-07-28/schema).
+
+SwiftMCP implements a strict, stateless MCP profile for typed Swift clients and servers. It has no
+external SwiftPM dependencies.
 
 한국어 안내: [README.ko.md](README.ko.md)
 
-## Start here
+## Scope
 
-SwiftMCP is a Swift Package with no external SwiftPM dependencies. It declares macOS 13+ and iOS
-16+ as its Apple platform baseline.
+- MCP `2026-07-28` only. Every request carries its own protocol metadata and capabilities.
+- HTTP connections and stdio processes are transports, not MCP sessions.
+- Supported product surface: discovery, tools, prompts, resources, completion, progress,
+  cancellation, subscriptions, MRTR, cache contracts, and bounded JSON Schema validation.
+- Not included: `initialize`, session headers, legacy transports, migration, downgrade behavior,
+  JSON-RPC batch, server-originated requests, or automatic OAuth retries.
+- `MCPOAuth` is optional. HTTP authorization, TLS termination, browser UI, callbacks, credential
+  storage, and retry policy remain host responsibilities.
+
+The built-in validator handles self-contained JSON Schema 2020-12 and draft-07 profiles, including
+local dynamic references. Unsupported dialects and unresolved external references fail closed; a
+host can explicitly supply another validator.
+
+## Install
+
+Add SwiftMCP from GitHub. The current published tag is `0.1.0`.
 
 ```swift
 dependencies: [
@@ -17,9 +34,19 @@ dependencies: [
 ]
 ```
 
-The published package identity is `swiftmcp` and the first release tag is `0.1.0`.
+Use the `swiftmcp` package identity when selecting products:
 
-For a local checkout:
+```swift
+.target(
+  name: "MyApp",
+  dependencies: [
+    .product(name: "MCP", package: "swiftmcp"),
+    .product(name: "MCPStdioClient", package: "swiftmcp"),
+  ]
+)
+```
+
+For a local checkout, use a relative path that matches your workspace:
 
 ```swift
 .package(path: "../swift-mcp-sdk")
@@ -30,26 +57,19 @@ For a local checkout:
 | Product | Purpose |
 | --- | --- |
 | `MCP` | Protocol models, JSON-RPC wire codec, stateless runtime, schema validation, MRTR, subscriptions, and cache contracts |
-| `MCPStdioClient` / `MCPStdioServer` | Child-process stdio transport and server runner |
 | `MCPHTTPClient` / `MCPHTTPServer` | Request-scoped HTTP POST with JSON or SSE responses |
+| `MCPStdioClient` / `MCPStdioServer` | Child-process stdio transport and server runner |
 | `MCPOAuth` | Optional OAuth client discovery and token flow |
 
-`MCPHTTPShared`, `MCPStdioShared`, and `MCPPlatformCrypto` are implementation targets. The
-`mcp-conformance-client` and `mcp-conformance-server` executables are verification fixtures.
+`MCPHTTPShared`, `MCPStdioShared`, and `MCPPlatformCrypto` are implementation targets.
+`mcp-conformance-client` and `mcp-conformance-server` are verification fixtures, not sample apps.
 
-## Protocol boundary
+## Samples
 
-- Supports MCP `2026-07-28` only.
-- Every request carries its own protocol metadata and capabilities.
-- HTTP connections and stdio processes are not MCP sessions.
-- No `initialize`, session headers, legacy transports, migration, downgrade retry, JSON-RPC batch,
-  server-originated request, or automatic OAuth retry.
-- HTTP authorization, TLS termination, browser UI, callbacks, credential storage, and replay policy
-  belong to the host application.
-
-The default schema validator supports self-contained JSON Schema 2020-12 and draft-07 profiles,
-including local dynamic references. Unsupported dialects and external references fail closed. A host
-can inject a different validator explicitly.
+Runnable examples are maintained separately in
+[AxiomSyncMCPSamples](https://github.com/axiom-orient/AxiomSyncMCPSamples), including
+`MCPPingPong`. This repository intentionally keeps only the SDK, its tests, and verification
+fixtures so the package remains focused.
 
 ## Minimal stdio server
 
@@ -82,7 +102,10 @@ try builder.register(MCPStandardMethods.callTool) { params, _ in
 try await MCPStdioServerRunner(server: builder.build()).run()
 ```
 
-## Client example
+## Connect a client
+
+For stdio, provide the server executable through host configuration instead of embedding a machine
+path in source code:
 
 ```swift
 import Foundation
@@ -94,9 +117,7 @@ guard let serverPath = ProcessInfo.processInfo.environment["MCP_SERVER_PATH"] el
 }
 
 let transport = MCPStdioClientTransport(
-  configuration: try MCPStdioClientConfiguration(
-    executableURL: URL(fileURLWithPath: serverPath)
-  )
+  configuration: try MCPStdioClientConfiguration(executableURL: URL(fileURLWithPath: serverPath))
 )
 let client = try MCPClient(
   transport: transport,
@@ -111,47 +132,58 @@ print(tools.tools.map(\.name))
 await transport.shutdown()
 ```
 
-For a local server listening at `http://127.0.0.1:8080/mcp`, replace the transport with
-`MCPHTTPClientTransport` and use `MCPHTTPClientConfiguration(endpoint:)`. The client sends each request
-as a POST and accepts either a single JSON response or a request-scoped SSE stream.
+For HTTP, use `MCPHTTPClientTransport` with `MCPHTTPClientConfiguration(endpoint:)`. Each request
+is a POST and receives either one JSON response or a request-scoped SSE stream.
 
-## HTTP deployment
-
-`MCPHTTPServer` binds to `127.0.0.1` by default. A non-loopback bind requires an explicit authorization
+`MCPHTTPServer` binds to loopback by default. A non-loopback bind needs an explicit authorization
 verifier. Put public deployments behind a trusted TLS terminator, configure the Origin policy, and
-provide OAuth Protected Resource Metadata in the host HTTP application when OAuth is used.
+provide OAuth Protected Resource Metadata in the surrounding HTTP application when OAuth is used.
 
-The optional `x-mcp-header` tool binding is strict by default: a declared `Mcp-Param-*` value must match
-the request body, or the server returns HTTP 400 with JSON-RPC error `-32020`.
+## Verify
 
-## Verify locally
+For a normal development loop:
 
 ```bash
 swift build
 swift test
+```
 
-./Scripts/clean.sh
+For the release gate:
+
+```bash
 SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
-The release gate checks the strict protocol surface, formatting, warnings-as-errors builds, the full
-test suite, release targets, and the stdio conformance smoke flow. GitHub Actions runs the same gate on
-macOS 14.
+`verify.sh` runs strict formatting, warnings-as-errors Debug and Release builds, the full test suite,
+and the stdio conformance smoke flow. It uses an isolated SwiftPM scratch directory and never reads,
+deletes, or replaces the repository’s `.build`. GitHub Actions runs this gate on macOS 14.
 
-Do not commit `.build`, `.swiftpm`, `.verification`, or `Artifacts`.
+`Scripts/clean.sh` removes only repository-local verification state; it leaves `.build` and
+`.swiftpm` intact. Do not commit `.build`, `.swiftpm`, `.verification`, `Artifacts`, generated ZIP files, or Finder
+metadata.
 
-For this repository, review and commit `Package.swift`, `Sources/`, `Tests/`, `Scripts/`, `.github/`,
-`.gitignore`, `.swift-format`, both README files, and `LICENSE`. The published remote and release tag are
-`axiom-orient/swiftMcp` and `0.1.0`:
+## Release checklist
+
+1. Review the source inputs: `Package.swift`, `Sources/`, `Tests/`, `Scripts/`, `.github/`,
+   `.gitignore`, `.swift-format`, both README files, and `LICENSE`.
+2. Run `SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh` from the commit intended for release.
+3. Confirm `git status --short` is empty and `git remote get-url origin` is the intended GitHub
+   repository.
+4. Wait for the matching GitHub Actions revision to pass, then create and push one new semantic
+   version tag. Never move an existing tag.
+5. Publish release notes from that tagged commit and use GitHub’s generated source archive rather
+   than a workspace ZIP.
+
+Example tag commands, after the checks above:
 
 ```bash
-git add Package.swift Sources Tests Scripts .github .gitignore .swift-format README.md README.ko.md LICENSE
-git commit -m "Initial SwiftMCP release"
-git remote add origin https://github.com/axiom-orient/swiftMcp.git
-git push -u origin main
-git tag -a 0.1.0 -m "SwiftMCP 0.1.0"
-git push origin 0.1.0
+RELEASE_TAG=0.1.1
+git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
+git push origin "$RELEASE_TAG"
 ```
+
+If a release must be withdrawn, stop distribution of the affected tag and direct consumers to the
+last verified tag. Do not retag a different commit under the same version.
 
 ## License
 

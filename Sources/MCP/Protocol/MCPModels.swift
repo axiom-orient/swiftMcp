@@ -224,19 +224,22 @@ public enum MCPCacheScope: String, Sendable, Hashable, MCPJSONModel {
 }
 
 public struct MCPCachePolicy: Sendable, Hashable {
-  public let ttlMilliseconds: Int64
+  /// The exact non-negative JSON Schema integer carried on the wire.
+  public let ttlMilliseconds: MCPJSONNumber
   public let scope: MCPCacheScope
 
-  public init(ttlMilliseconds: Int64, scope: MCPCacheScope) throws {
-    guard ttlMilliseconds >= 0 else {
-      throw MCPJSONError.invalidField(field: "ttlMs", reason: "must be non-negative")
-    }
+  public init(ttlMilliseconds: MCPJSONNumber, scope: MCPCacheScope) throws {
+    try mcpValidateNonnegativeInteger(ttlMilliseconds, field: "ttlMs")
     self.ttlMilliseconds = ttlMilliseconds
     self.scope = scope
   }
 
+  public init(ttlMilliseconds: Int64, scope: MCPCacheScope) throws {
+    try self.init(ttlMilliseconds: MCPJSONNumber(ttlMilliseconds), scope: scope)
+  }
+
   private init(uncheckedTTL ttlMilliseconds: Int64, scope: MCPCacheScope) {
-    self.ttlMilliseconds = ttlMilliseconds
+    self.ttlMilliseconds = MCPJSONNumber(ttlMilliseconds)
     self.scope = scope
   }
 
@@ -246,7 +249,7 @@ public struct MCPCachePolicy: Sendable, Hashable {
   public static let defaultResourceRead = MCPCachePolicy(uncheckedTTL: 0, scope: .private)
 
   public static func extract(from object: MCPJSONObject, required: Bool) throws -> MCPCachePolicy? {
-    let ttl = try object.optionalInteger("ttlMs")
+    let ttl = try object.optionalNumber("ttlMs")
     let scopeValue = object.values["cacheScope"]
     if ttl == nil && scopeValue == nil {
       if required {
@@ -266,7 +269,7 @@ public struct MCPCachePolicy: Sendable, Hashable {
   }
 
   fileprivate func insert(into object: inout [String: MCPJSONValue]) {
-    object["ttlMs"] = .integer(ttlMilliseconds)
+    object["ttlMs"] = .number(ttlMilliseconds)
     object["cacheScope"] = scope.json
   }
 }
@@ -552,7 +555,8 @@ public struct MCPResourceLinkContent: Sendable, Hashable, MCPJSONModel {
   public let title: String?
   public let descriptionText: String?
   public let mimeType: String?
-  public let size: Int64?
+  /// The exact JSON Schema integer size, when the server provides one.
+  public let size: MCPJSONNumber?
   public let annotations: MCPAnnotations?
   public let icons: [MCPIcon]
   public let metadata: [String: MCPJSONValue]
@@ -563,7 +567,7 @@ public struct MCPResourceLinkContent: Sendable, Hashable, MCPJSONModel {
     title: String? = nil,
     description: String? = nil,
     mimeType: String? = nil,
-    size: Int64? = nil,
+    size: MCPJSONNumber? = nil,
     annotations: MCPAnnotations? = nil,
     icons: [MCPIcon] = [],
     metadata: [String: MCPJSONValue] = [:]
@@ -571,9 +575,7 @@ public struct MCPResourceLinkContent: Sendable, Hashable, MCPJSONModel {
     guard !uri.isEmpty, !name.isEmpty else {
       throw MCPJSONError.invalidField(field: "resource_link", reason: "uri and name are required")
     }
-    if let size, size < 0 {
-      throw MCPJSONError.invalidField(field: "size", reason: "must be non-negative")
-    }
+    if let size { try mcpValidateInteger(size, field: "size") }
     try MCPProtocolValidation.validateMetadataExtensions(metadata)
     self.uri = uri
     self.name = name
@@ -584,6 +586,22 @@ public struct MCPResourceLinkContent: Sendable, Hashable, MCPJSONModel {
     self.annotations = annotations
     self.icons = icons
     self.metadata = metadata
+  }
+
+  public init(
+    uri: String,
+    name: String,
+    title: String? = nil,
+    description: String? = nil,
+    mimeType: String? = nil,
+    size: Int64,
+    annotations: MCPAnnotations? = nil,
+    icons: [MCPIcon] = [],
+    metadata: [String: MCPJSONValue] = [:]
+  ) throws {
+    try self.init(
+      uri: uri, name: name, title: title, description: description, mimeType: mimeType,
+      size: MCPJSONNumber(size), annotations: annotations, icons: icons, metadata: metadata)
   }
 
   public init(json: MCPJSONValue) throws {
@@ -597,7 +615,7 @@ public struct MCPResourceLinkContent: Sendable, Hashable, MCPJSONModel {
       title: try object.optionalString("title"),
       description: try object.optionalString("description"),
       mimeType: try object.optionalString("mimeType"),
-      size: try object.optionalInteger("size"),
+      size: try object.optionalNumber("size"),
       annotations: try object.values["annotations"].map(MCPAnnotations.init(json:)),
       icons: try object.optionalArray("icons")?.map(MCPIcon.init(json:)) ?? [],
       metadata: try object.optionalObject("_meta") ?? [:]
@@ -612,7 +630,7 @@ public struct MCPResourceLinkContent: Sendable, Hashable, MCPJSONModel {
       ("title", title.map(MCPJSONValue.string)),
       ("description", descriptionText.map(MCPJSONValue.string)),
       ("mimeType", mimeType.map(MCPJSONValue.string)),
-      ("size", size.map(MCPJSONValue.integer)),
+      ("size", size.map(MCPJSONValue.number)),
       ("annotations", annotations?.json),
       ("icons", icons.isEmpty ? nil : .array(icons.map(\.json))),
       ("_meta", metadata.isEmpty ? nil : .object(metadata)),
@@ -1483,7 +1501,8 @@ public struct MCPResource: Sendable, Hashable, MCPJSONModel {
   public let title: String?
   public let descriptionText: String?
   public let mimeType: String?
-  public let size: Int64?
+  /// The exact JSON Schema integer size, when the server provides one.
+  public let size: MCPJSONNumber?
   public let annotations: MCPAnnotations?
   public let icons: [MCPIcon]
   public let metadata: [String: MCPJSONValue]
@@ -1494,7 +1513,7 @@ public struct MCPResource: Sendable, Hashable, MCPJSONModel {
     title: String? = nil,
     description: String? = nil,
     mimeType: String? = nil,
-    size: Int64? = nil,
+    size: MCPJSONNumber? = nil,
     annotations: MCPAnnotations? = nil,
     icons: [MCPIcon] = [],
     metadata: [String: MCPJSONValue] = [:]
@@ -1502,9 +1521,7 @@ public struct MCPResource: Sendable, Hashable, MCPJSONModel {
     guard !uri.isEmpty, !name.isEmpty else {
       throw MCPJSONError.invalidField(field: "resource", reason: "uri and name are required")
     }
-    if let size, size < 0 {
-      throw MCPJSONError.invalidField(field: "size", reason: "must be non-negative")
-    }
+    if let size { try mcpValidateInteger(size, field: "size") }
     try MCPProtocolValidation.validateMetadataExtensions(metadata)
     self.uri = uri
     self.name = name
@@ -1516,6 +1533,21 @@ public struct MCPResource: Sendable, Hashable, MCPJSONModel {
     self.icons = icons
     self.metadata = metadata
   }
+  public init(
+    uri: String,
+    name: String,
+    title: String? = nil,
+    description: String? = nil,
+    mimeType: String? = nil,
+    size: Int64,
+    annotations: MCPAnnotations? = nil,
+    icons: [MCPIcon] = [],
+    metadata: [String: MCPJSONValue] = [:]
+  ) throws {
+    try self.init(
+      uri: uri, name: name, title: title, description: description, mimeType: mimeType,
+      size: MCPJSONNumber(size), annotations: annotations, icons: icons, metadata: metadata)
+  }
   public init(json: MCPJSONValue) throws {
     let object = try MCPJSONObject(json)
     try self.init(
@@ -1523,7 +1555,7 @@ public struct MCPResource: Sendable, Hashable, MCPJSONModel {
       name: try object.requiredNonEmptyString("name"),
       title: try object.optionalString("title"),
       description: try object.optionalString("description"),
-      mimeType: try object.optionalString("mimeType"), size: try object.optionalInteger("size"),
+      mimeType: try object.optionalString("mimeType"), size: try object.optionalNumber("size"),
       annotations: try object.values["annotations"].map(MCPAnnotations.init(json:)),
       icons: try object.optionalArray("icons")?.map(MCPIcon.init(json:)) ?? [],
       metadata: try object.optionalObject("_meta") ?? [:])
@@ -1532,7 +1564,7 @@ public struct MCPResource: Sendable, Hashable, MCPJSONModel {
     mcpObject([
       ("uri", .string(uri)), ("name", .string(name)), ("title", title.map(MCPJSONValue.string)),
       ("description", descriptionText.map(MCPJSONValue.string)),
-      ("mimeType", mimeType.map(MCPJSONValue.string)), ("size", size.map(MCPJSONValue.integer)),
+      ("mimeType", mimeType.map(MCPJSONValue.string)), ("size", size.map(MCPJSONValue.number)),
       ("annotations", annotations?.json),
       ("icons", icons.isEmpty ? nil : .array(icons.map(\.json))),
       ("_meta", metadata.isEmpty ? nil : .object(metadata)),
@@ -1888,18 +1920,20 @@ public struct MCPCompleteParams: Sendable, Hashable, MCPJSONModel {
 
 public struct MCPCompletion: Sendable, Hashable, MCPJSONModel {
   public let values: [String]
-  public let total: Int64?
+  /// The exact JSON Schema integer total, when the server provides one.
+  public let total: MCPJSONNumber?
   public let hasMore: Bool?
-  public init(values: [String], total: Int64? = nil, hasMore: Bool? = nil) throws {
+  public init(values: [String], total: MCPJSONNumber? = nil, hasMore: Bool? = nil) throws {
     guard values.count <= 100 else {
       throw MCPJSONError.invalidField(field: "values", reason: "must contain at most 100 items")
     }
-    if let total, total < 0 {
-      throw MCPJSONError.invalidField(field: "total", reason: "must be non-negative")
-    }
+    if let total { try mcpValidateInteger(total, field: "total") }
     self.values = values
     self.total = total
     self.hasMore = hasMore
+  }
+  public init(values: [String], total: Int64, hasMore: Bool? = nil) throws {
+    try self.init(values: values, total: MCPJSONNumber(total), hasMore: hasMore)
   }
   public init(json: MCPJSONValue) throws {
     let object = try MCPJSONObject(json)
@@ -1909,11 +1943,11 @@ public struct MCPCompletion: Sendable, Hashable, MCPJSONModel {
           throw MCPJSONError.expectedString(field: "values[]")
         }
         return value
-      }, total: try object.optionalInteger("total"), hasMore: try object.optionalBool("hasMore"))
+      }, total: try object.optionalNumber("total"), hasMore: try object.optionalBool("hasMore"))
   }
   public var json: MCPJSONValue {
     mcpObject([
-      ("values", mcpStringArray(values)), ("total", total.map(MCPJSONValue.integer)),
+      ("values", mcpStringArray(values)), ("total", total.map(MCPJSONValue.number)),
       ("hasMore", hasMore.map(MCPJSONValue.bool)),
     ])
   }
@@ -2147,13 +2181,23 @@ public enum MCPSubscriptionReducer {
 
 private func mcpResultType(_ object: MCPJSONObject) throws -> MCPResultType {
   guard let value = object.values["resultType"] else {
-    // Clients must interpret a result from an earlier server without resultType as complete.
-    return .complete
+    throw MCPJSONError.missingField("resultType")
   }
   guard case .string(let raw) = value else {
     throw MCPJSONError.invalidField(field: "resultType", reason: "expected string")
   }
   return try MCPResultType(rawValue: raw)
+}
+
+private func mcpValidateNonnegativeInteger(_ value: MCPJSONNumber, field: String) throws {
+  try mcpValidateInteger(value, field: field)
+  guard value.compare(to: MCPJSONNumber(0)) != .orderedAscending else {
+    throw MCPJSONError.invalidField(field: field, reason: "must be non-negative")
+  }
+}
+
+private func mcpValidateInteger(_ value: MCPJSONNumber, field: String) throws {
+  guard value.isMathematicalInteger else { throw MCPJSONError.expectedInteger(field: field) }
 }
 
 private func mcpRequiredCompleteResultType(_ object: MCPJSONObject) throws -> MCPResultType {

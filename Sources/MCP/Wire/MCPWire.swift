@@ -111,7 +111,7 @@ public enum MCPWireError: Error, Sendable, Equatable, CustomStringConvertible {
   case floatingRequestID
   case invalidRequestID
   case invalidErrorCode
-  /// A locally generated server result omitted the required result discriminator.
+  /// A result omitted the required discriminator for this strict stateless profile.
   case missingResultType
   case invalidResultType(String)
   case resultMustBeObject
@@ -131,7 +131,7 @@ public enum MCPWireError: Error, Sendable, Equatable, CustomStringConvertible {
     case .invalidRequestID: "JSON-RPC id must be a string or integer"
     case .invalidErrorCode: "JSON-RPC error code must fit Int64"
     case .missingResultType:
-      "server-generated MCP result is missing resultType"
+      "MCP result is missing resultType"
     case .invalidResultType(let value): "Invalid resultType \(value.debugDescription)"
     case .resultMustBeObject: "MCP successful result must be an object"
     case .paramsMustBeObject: "MCP params must be an object"
@@ -279,16 +279,13 @@ public enum MCPWireMessage: Sendable, Hashable {
       guard case .object(let result)? = object["result"] else {
         throw MCPWireError.resultMustBeObject
       }
-      let resultType: MCPResultType
-      if let rawResultType = result["resultType"] {
-        guard case .string(let value) = rawResultType else {
-          throw MCPWireError.invalidResultType("non-string resultType")
-        }
-        resultType = try MCPResultType(rawValue: value)
-      } else {
-        // The 2026-07-28 client rule accepts an earlier server's omitted field as complete.
-        resultType = .complete
+      guard let rawResultType = result["resultType"] else {
+        throw MCPWireError.missingResultType
       }
+      guard case .string(let value) = rawResultType else {
+        throw MCPWireError.invalidResultType("non-string resultType")
+      }
+      let resultType = try MCPResultType(rawValue: value)
       return .result(MCPWireResult(id: id, resultType: resultType, value: result))
     }
 

@@ -4,6 +4,8 @@
 /.verification/
 /Artifacts/
 .docc-build/
+__MACOSX/
+*.zip
 
 # Xcode build and per-user state.
 DerivedData/
