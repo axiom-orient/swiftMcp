@@ -1,0 +1,30 @@
+# SwiftPM and repository verification output.
+.build/
+.swiftpm/
+/.verification/
+/Artifacts/
+.docc-build/
+
+# Xcode build and per-user state.
+DerivedData/
+*.xcresult
+*.profraw
+*.profdata
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xccheckout
+**/*.xcscmblueprint
+
+# macOS, editor, temporary, and local-secret files.
+.DS_Store
+.env
+.env.*
+!.env.example
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+*.rej
+*.log
+*~
