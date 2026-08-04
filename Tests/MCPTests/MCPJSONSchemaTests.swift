@@ -522,6 +522,18 @@ final class MCPJSONSchemaTests: XCTestCase {
     }
   }
 
+  func testEnumUsesExactStringCodepointsAndAllowsEmptyEnum() throws {
+    let empty = MCPJSONValue.object(["enum": .array([])])
+    try validator.validateSchema(empty)
+    XCTAssertThrowsError(try validator.validate(.string("anything"), against: empty))
+
+    let composed = "\u{00E9}"
+    let decomposed = "e\u{0301}"
+    let schema = MCPJSONValue.object(["enum": .array([.string(composed)])])
+    try validator.validate(.string(composed), against: schema)
+    XCTAssertThrowsError(try validator.validate(.string(decomposed), against: schema))
+  }
+
   func testLargeUniqueArrayValidationRemainsBounded() throws {
     let values = (0..<5_000).map { MCPJSONValue.integer($0) }
     let schema: MCPJSONValue = .object([

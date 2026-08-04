@@ -58,13 +58,65 @@ public enum MCPResultType: Sendable, Hashable, Equatable {
   }
 }
 
+public struct MCPRPCErrorCode: Sendable, Hashable, CustomStringConvertible,
+  ExpressibleByIntegerLiteral
+{
+  public let rawValue: MCPJSONNumber
+
+  public init(_ value: Int) {
+    rawValue = MCPJSONNumber(value)
+  }
+
+  public init(_ value: Int64) {
+    rawValue = MCPJSONNumber(value)
+  }
+
+  public init(_ value: UInt64) {
+    rawValue = MCPJSONNumber(value)
+  }
+
+  public init(rawValue: MCPJSONNumber) throws {
+    guard rawValue.isMathematicalInteger else { throw MCPWireError.invalidErrorCode }
+    self.rawValue = rawValue
+  }
+
+  public init(integerLiteral value: Int) {
+    self.init(value)
+  }
+
+  public var int64Value: Int64? {
+    rawValue.exactIntValue.map(Int64.init)
+  }
+
+  public var description: String { rawValue.rawValue }
+
+  public static prefix func - (value: Self) -> Self {
+    let rawValue = value.rawValue.rawValue
+    let negated =
+      rawValue.first == "-"
+      ? String(rawValue.dropFirst())
+      : "-" + rawValue
+    return Self(validatedRawValue: negated)
+  }
+
+  private init(validatedRawValue: String) {
+    rawValue = MCPJSONNumber(validated: validatedRawValue)
+  }
+}
+
 public struct MCPRPCError: Error, Sendable, Hashable, CustomStringConvertible {
-  public let code: Int64
+  public let code: MCPRPCErrorCode
   public let message: String
   public let data: MCPJSONValue?
 
   public init(code: Int64, message: String, data: MCPJSONValue? = nil) {
-    self.code = code
+    self.code = MCPRPCErrorCode(code)
+    self.message = message
+    self.data = data
+  }
+
+  public init(code: MCPJSONNumber, message: String, data: MCPJSONValue? = nil) throws {
+    self.code = try MCPRPCErrorCode(rawValue: code)
     self.message = message
     self.data = data
   }
@@ -129,7 +181,7 @@ public enum MCPWireError: Error, Sendable, Equatable, CustomStringConvertible {
     case .nullRequestID: "JSON-RPC null id is rejected by strict mode"
     case .floatingRequestID: "JSON-RPC floating-point id is rejected by strict mode"
     case .invalidRequestID: "JSON-RPC id must be a string or integer"
-    case .invalidErrorCode: "JSON-RPC error code must fit Int64"
+    case .invalidErrorCode: "JSON-RPC error code must be an integer"
     case .missingResultType:
       "MCP result is missing resultType"
     case .invalidResultType(let value): "Invalid resultType \(value.debugDescription)"
@@ -331,14 +383,13 @@ extension MCPRPCError: MCPJSONModel {
   public init(json: MCPJSONValue) throws {
     let object = try MCPJSONObject(json)
     guard let codeNumber = object.values["code"]?.numberValue,
-      codeNumber.isInteger,
-      let code = codeNumber.int64Value
+      codeNumber.isMathematicalInteger
     else { throw MCPWireError.invalidErrorCode }
-    self.init(
-      code: code, message: try object.requiredString("message"), data: object.values["data"])
+    try self.init(
+      code: codeNumber, message: try object.requiredString("message"), data: object.values["data"])
   }
 
   public var json: MCPJSONValue {
-    mcpObject([("code", .integer(code)), ("message", .string(message)), ("data", data)])
+    mcpObject([("code", .number(code.rawValue)), ("message", .string(message)), ("data", data)])
   }
 }

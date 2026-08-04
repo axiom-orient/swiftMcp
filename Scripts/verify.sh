@@ -102,6 +102,9 @@ swift test --scratch-path "$VERIFY_SCRATCH_PATH" --jobs "${SWIFT_BUILD_JOBS:-1}"
 printf '\n== release build ==\n'
 swift build --scratch-path "$VERIFY_SCRATCH_PATH" -c release --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
 
+printf '\n== JSON Schema 2020-12 corpus ==\n'
+SWIFTMCP_VERIFY_SCRATCH_PATH="$VERIFY_SCRATCH_PATH" bash ./Scripts/verify-json-schema-corpus.sh
+
 BIN_PATH="$(swift build --scratch-path "$VERIFY_SCRATCH_PATH" --show-bin-path)"
 
 printf '\n== stdio conformance smoke ==\n'

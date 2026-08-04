@@ -820,7 +820,10 @@ public struct MCPServer: Sendable {
       -32700, -32600, -32601, -32602, -32603,
       -32020, -32021, -32022,
     ]
-    if (-32768 ... -32000).contains(error.code), !permittedReservedCodes.contains(error.code) {
+    if let code = error.code.int64Value,
+      (-32768 ... -32000).contains(code),
+      !permittedReservedCodes.contains(code)
+    {
       return .internalError
     }
     return error

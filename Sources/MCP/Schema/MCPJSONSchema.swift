@@ -1192,11 +1192,11 @@ private struct MCPJSONSchemaCompiler {
       inspectRegex(value, keyword: "pattern", location: location + "/pattern")
     }
     if let enumValue = object["enum"] {
-      guard case .array(let values) = enumValue, !values.isEmpty else {
-        addIssue(keyword: "enum", location: location + "/enum", message: "expected non-empty array")
+      guard case .array(let values) = enumValue else {
+        addIssue(keyword: "enum", location: location + "/enum", message: "expected array")
         return
       }
-      var semanticValues = Set<String>()
+      var semanticValues = Set<[UInt8]>()
       for value in values where !semanticValues.insert(value.schemaSemanticFingerprint).inserted {
         addIssue(keyword: "enum", location: location + "/enum", message: "values must be unique")
         return
@@ -1421,8 +1421,9 @@ private struct MCPJSONSchemaEvaluation {
 
   var valid: Bool { issues.isEmpty }
 
-  mutating func merge(_ other: MCPJSONSchemaEvaluation) {
+  mutating func merge(_ other: MCPJSONSchemaEvaluation, annotations: Bool = true) {
     issues.append(contentsOf: other.issues)
+    guard annotations else { return }
     evaluatedProperties.formUnion(other.evaluatedProperties)
     evaluatedItems.formUnion(other.evaluatedItems)
   }
@@ -1628,7 +1629,7 @@ private struct MCPJSONSchemaEvaluator {
             instanceLocation: instanceLocation + "/" + MCPJSONSchemaCompiler.escape(key),
             depth: depth + 1
           )
-          result.merge(child)
+          result.merge(child, annotations: false)
           result.evaluatedProperties.insert(key)
         }
       }
@@ -1641,7 +1642,7 @@ private struct MCPJSONSchemaEvaluator {
             instanceLocation: instanceLocation + "/\(index)",
             depth: depth + 1
           )
-          result.merge(child)
+          result.merge(child, annotations: false)
           result.evaluatedItems.insert(index)
         }
       }
@@ -1878,7 +1879,7 @@ private struct MCPJSONSchemaEvaluator {
         throw MCPJSONSchemaError.resourceLimit(
           "uniqueItems exceeds \(limits.maximumUniqueItems) values")
       }
-      var semanticValues = Set<String>()
+      var semanticValues = Set<[UInt8]>()
       for value in values where !semanticValues.insert(value.schemaSemanticFingerprint).inserted {
         result.merge(
           issue(
@@ -1899,7 +1900,7 @@ private struct MCPJSONSchemaEvaluator {
           try evaluate(
             schema: prefixes[index], schemaLocation: schemaLocation + "/prefixItems/\(index)",
             instance: values[index], instanceLocation: instanceLocation + "/\(index)",
-            depth: depth + 1))
+            depth: depth + 1), annotations: false)
         result.evaluatedItems.insert(index)
       }
       if let items = schema["items"] {
@@ -1909,7 +1910,8 @@ private struct MCPJSONSchemaEvaluator {
           result.merge(
             try evaluate(
               schema: items, schemaLocation: schemaLocation + "/items", instance: values[index],
-              instanceLocation: instanceLocation + "/\(index)", depth: depth + 1))
+              instanceLocation: instanceLocation + "/\(index)", depth: depth + 1),
+            annotations: false)
           result.evaluatedItems.insert(index)
         }
       }
@@ -1920,7 +1922,8 @@ private struct MCPJSONSchemaEvaluator {
             result.merge(
               try evaluate(
                 schema: items, schemaLocation: schemaLocation + "/items", instance: values[index],
-                instanceLocation: instanceLocation + "/\(index)", depth: depth + 1))
+                instanceLocation: instanceLocation + "/\(index)", depth: depth + 1),
+              annotations: false)
             result.evaluatedItems.insert(index)
           }
         } else if case .array(let tuple) = items {
@@ -1929,7 +1932,7 @@ private struct MCPJSONSchemaEvaluator {
               try evaluate(
                 schema: tuple[index], schemaLocation: schemaLocation + "/items/\(index)",
                 instance: values[index], instanceLocation: instanceLocation + "/\(index)",
-                depth: depth + 1))
+                depth: depth + 1), annotations: false)
             result.evaluatedItems.insert(index)
           }
           let additional = schema["additionalItems"] ?? .bool(true)
@@ -1939,7 +1942,7 @@ private struct MCPJSONSchemaEvaluator {
               try evaluate(
                 schema: additional, schemaLocation: schemaLocation + "/additionalItems",
                 instance: values[index], instanceLocation: instanceLocation + "/\(index)",
-                depth: depth + 1))
+                depth: depth + 1), annotations: false)
             result.evaluatedItems.insert(index)
           }
         }
@@ -2021,7 +2024,7 @@ private struct MCPJSONSchemaEvaluator {
             schemaLocation: schemaLocation + "/properties/" + MCPJSONSchemaCompiler.escape(key),
             instance: value,
             instanceLocation: instanceLocation + "/" + MCPJSONSchemaCompiler.escape(key),
-            depth: depth + 1))
+            depth: depth + 1), annotations: false)
         matched.insert(key)
         result.evaluatedProperties.insert(key)
       }
@@ -2036,7 +2039,7 @@ private struct MCPJSONSchemaEvaluator {
               schemaLocation: schemaLocation + "/patternProperties/"
                 + MCPJSONSchemaCompiler.escape(pattern), instance: value,
               instanceLocation: instanceLocation + "/" + MCPJSONSchemaCompiler.escape(key),
-              depth: depth + 1))
+              depth: depth + 1), annotations: false)
           matched.insert(key)
           result.evaluatedProperties.insert(key)
         }
@@ -2052,7 +2055,7 @@ private struct MCPJSONSchemaEvaluator {
             schema: additional, schemaLocation: schemaLocation + "/additionalProperties",
             instance: value,
             instanceLocation: instanceLocation + "/" + MCPJSONSchemaCompiler.escape(key),
-            depth: depth + 1))
+            depth: depth + 1), annotations: false)
         result.evaluatedProperties.insert(key)
       }
     }
@@ -2122,7 +2125,7 @@ private struct MCPJSONSchemaEvaluator {
             schema: names, schemaLocation: schemaLocation + "/propertyNames",
             instance: .string(key),
             instanceLocation: instanceLocation + "/" + MCPJSONSchemaCompiler.escape(key),
-            depth: depth + 1))
+            depth: depth + 1), annotations: false)
       }
     }
     return result
@@ -2189,7 +2192,7 @@ extension MCPJSONValue {
     case (.null, .null): true
     case (.bool(let lhs), .bool(let rhs)): lhs == rhs
     case (.number(let lhs), .number(let rhs)): lhs.isNumericallyEqual(to: rhs)
-    case (.string(let lhs), .string(let rhs)): lhs == rhs
+    case (.string(let lhs), .string(let rhs)): lhs.utf8.elementsEqual(rhs.utf8)
     case (.array(let lhs), .array(let rhs)):
       lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { $0.schemaSemanticEquals($1) }
     case (.object(let lhs), .object(let rhs)):
@@ -2201,29 +2204,35 @@ extension MCPJSONValue {
     }
   }
 
-  fileprivate var schemaSemanticFingerprint: String {
+  fileprivate var schemaSemanticFingerprint: [UInt8] {
     switch self {
     case .null:
-      return "n"
+      return [0]
     case .bool(let value):
-      return value ? "b1" : "b0"
+      return [1, UInt8(value ? 1 : 0)]
     case .number(let value):
-      return "d\(value.schemaSemanticKey.utf8.count):\(value.schemaSemanticKey)"
+      return [2] + lengthPrefixed(Array(value.schemaSemanticKey.utf8))
     case .string(let value):
-      return "s\(value.utf8.count):\(value)"
+      return [3] + lengthPrefixed(Array(value.utf8))
     case .array(let values):
-      return "a"
-        + values.map { value in
-          let child = value.schemaSemanticFingerprint
-          return "\(child.utf8.count):\(child)"
-        }.joined()
+      return [4] + values.flatMap { lengthPrefixed($0.schemaSemanticFingerprint) }
     case .object(let values):
-      return "o"
-        + values.sorted(by: { $0.key < $1.key }).map { key, value in
-          let child = value.schemaSemanticFingerprint
-          return "\(key.utf8.count):\(key)\(child.utf8.count):\(child)"
-        }.joined()
+      return [5]
+        + values.sorted(by: { $0.key.utf8.lexicographicallyPrecedes($1.key.utf8) })
+        .flatMap { key, value in
+          lengthPrefixed(Array(key.utf8)) + lengthPrefixed(value.schemaSemanticFingerprint)
+        }
     }
+  }
+
+  private func lengthPrefixed(_ bytes: [UInt8]) -> [UInt8] {
+    let count = UInt64(bytes.count)
+    var result: [UInt8] = []
+    for shift in stride(from: 56, through: 0, by: -8) {
+      result.append(UInt8((count >> UInt64(shift)) & 0xff))
+    }
+    result.append(contentsOf: bytes)
+    return result
   }
 
   fileprivate func value(atJSONPointer pointer: String) -> MCPJSONValue? {

@@ -1,8 +1,9 @@
 # SwiftMCP
 
-SwiftMCP는 공식 [MCP `2026-07-28` 명세](https://modelcontextprotocol.io/specification/2026-07-28)와
-[schema reference](https://modelcontextprotocol.io/specification/2026-07-28/schema)를 따르는 Swift
-6.2 이상용 SDK입니다.
+SwiftMCP는 공식 [MCP `2026-07-28` 명세](https://modelcontextprotocol.io/specification/2026-07-28)를
+따르며, upstream [`5f5440b`](https://github.com/modelcontextprotocol/modelcontextprotocol/commit/5f5440bb26a62e2cf3440b92da5a667efa03b267)
+commit과 [그 commit의 schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5f5440bb26a62e2cf3440b92da5a667efa03b267/schema/2026-07-28/schema.json)를
+고정 기준으로 사용합니다. Swift 6.2 이상용 SDK입니다.
 
 이 SDK는 타입이 있는 Swift client와 server를 위한 엄격한 stateless MCP 프로필을 구현합니다. 외부
 SwiftPM 의존성은 없습니다.
@@ -24,13 +25,21 @@ English: [README.md](README.md)
 프로필을 처리합니다. 지원하지 않는 dialect와 해석할 수 없는 외부 reference는 fail-closed로
 거부합니다. 다른 validator가 필요하면 호스트가 명시적으로 주입해야 합니다.
 
+### Breaking wire-code API
+
+`MCPRPCError.code` 타입은 이제 `Int64`가 아니라 `MCPRPCErrorCode`입니다. 따라서 `Int64` 범위를
+넘는 wire-valid mathematical integer도 거부하지 않고, JSON number의 원래 lexeme도 보존합니다.
+정확한 wire 값은 `error.code.rawValue`, `Int64`가 필요한 경우에는 `error.code.int64Value`를
+사용하세요. 일반적인 오류 생성에서는 integer literal과 기존
+`MCPRPCError(code: Int64, ...)` initializer를 계속 사용할 수 있습니다.
+
 ## 설치
 
-GitHub에서 SwiftMCP를 추가합니다. 현재 공개 태그는 `0.1.0`입니다.
+GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.1.2`입니다.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.2")
 ]
 ```
 
@@ -62,7 +71,8 @@ product를 지정할 때는 `swiftmcp` 패키지 식별자를 사용합니다.
 | `MCPOAuth` | 선택적인 OAuth client discovery와 token 흐름 |
 
 `MCPHTTPShared`, `MCPStdioShared`, `MCPPlatformCrypto`는 구현 대상입니다.
-`mcp-conformance-client`와 `mcp-conformance-server`는 샘플 앱이 아니라 검증 fixture입니다.
+`mcp-conformance-client`, `mcp-conformance-server`, `mcp-json-schema-corpus`는 샘플 앱이 아니라
+검증 fixture입니다.
 
 ## 샘플
 
@@ -154,9 +164,12 @@ swift test
 SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
-`verify.sh`는 엄격한 형식 검사, warnings-as-errors Debug·Release build, 전체 test, stdio conformance
-smoke를 실행합니다. 이 스크립트는 별도의 SwiftPM 격리 빌드 디렉터리를 사용하며, 저장소의 `.build`를
-읽거나 지우거나 바꾸지 않습니다. GitHub Actions도 macOS 14에서 같은 게이트를 실행합니다.
+`verify.sh`는 엄격한 형식 검사, warnings-as-errors Debug·Release build, 전체 test, 고정된 JSON Schema
+2020-12 corpus, stdio conformance smoke를 실행합니다. 별도의 SwiftPM·corpus 디렉터리를 사용하며,
+저장소의 `.build`를 읽거나 지우거나 바꾸지 않습니다. corpus runner는 self-contained 프로필을
+검증하고 외부 reference나 지원하지 않는 dialect는 명시적으로 skip합니다. 다운로드를 피하려면
+`MCP_JSON_SCHEMA_CORPUS_PATH`에 고정 commit [`fb7372e`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/commit/fb7372e8763a1417bddc65fa4c911b3e79b57b65)의
+로컬 checkout 경로를 지정하세요.
 
 `Scripts/clean.sh`도 저장소 내부의 verification state만 정리하며 `.build`와 `.swiftpm`은 그대로 둡니다.
 `.build`, `.swiftpm`, `.verification`, `Artifacts`, 생성된 ZIP 파일, Finder metadata는 커밋하지
@@ -164,20 +177,20 @@ smoke를 실행합니다. 이 스크립트는 별도의 SwiftPM 격리 빌드 �
 
 ## 릴리스 점검표
 
-1. `Package.swift`, `Sources/`, `Tests/`, `Scripts/`, `.github/`, `.gitignore`, `.swift-format`,
+1. `Package.swift`, `Sources/`, `Tests/`, `Scripts/`, `.gitignore`, `.swift-format`,
    두 README, `LICENSE`를 배포 입력으로 검토합니다.
 2. 배포할 commit에서 `SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh`를 실행합니다.
 3. `git status --short`가 비어 있는지, `git remote get-url origin`이 올바른 GitHub 저장소인지
    확인합니다.
-4. 같은 revision의 GitHub Actions가 통과한 뒤 새 semantic version tag를 하나 만들고 push합니다.
-   이미 만든 tag를 다른 commit으로 옮기지 마세요.
+4. gate가 사용한 MCP와 JSON Schema corpus revision을 확인한 뒤 새 semantic version tag를 하나 만들고
+   push합니다. 이미 만든 tag를 다른 commit으로 옮기지 마세요.
 5. 태그를 만든 commit에서 release note를 작성하고, 작업 공간 ZIP 대신 GitHub가 생성한 source archive를
    사용합니다.
 
 위 확인이 끝난 뒤 tag를 만드는 예시는 다음과 같습니다.
 
 ```bash
-RELEASE_TAG=0.1.1
+RELEASE_TAG=0.1.3
 git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 ```

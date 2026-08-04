@@ -1,8 +1,9 @@
 # SwiftMCP
 
 Swift 6.2+ SDK for the official [Model Context Protocol (MCP) `2026-07-28`
-specification](https://modelcontextprotocol.io/specification/2026-07-28) and its
-[schema reference](https://modelcontextprotocol.io/specification/2026-07-28/schema).
+specification](https://modelcontextprotocol.io/specification/2026-07-28), pinned to upstream
+commit [`5f5440b`](https://github.com/modelcontextprotocol/modelcontextprotocol/commit/5f5440bb26a62e2cf3440b92da5a667efa03b267),
+and its [schema reference at that commit](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5f5440bb26a62e2cf3440b92da5a667efa03b267/schema/2026-07-28/schema.json).
 
 SwiftMCP implements a strict, stateless MCP profile for typed Swift clients and servers. It has no
 external SwiftPM dependencies.
@@ -24,13 +25,21 @@ The built-in validator handles self-contained JSON Schema 2020-12 and draft-07 p
 local dynamic references. Unsupported dialects and unresolved external references fail closed; a
 host can explicitly supply another validator.
 
+### Breaking wire-code API
+
+`MCPRPCError.code` is an `MCPRPCErrorCode`, not an `Int64`. This preserves every wire-valid
+mathematical integer, including values outside `Int64`, and retains its exact JSON number lexeme.
+Use `error.code.rawValue` for the exact wire number or `error.code.int64Value` when an `Int64?` is
+appropriate. Integer literals and the existing `MCPRPCError(code: Int64, ...)` initializer remain
+available for ordinary error construction.
+
 ## Install
 
-Add SwiftMCP from GitHub. The current published tag is `0.1.0`.
+Add SwiftMCP from GitHub. The current repository tag is `0.1.2`.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.2")
 ]
 ```
 
@@ -62,7 +71,8 @@ For a local checkout, use a relative path that matches your workspace:
 | `MCPOAuth` | Optional OAuth client discovery and token flow |
 
 `MCPHTTPShared`, `MCPStdioShared`, and `MCPPlatformCrypto` are implementation targets.
-`mcp-conformance-client` and `mcp-conformance-server` are verification fixtures, not sample apps.
+`mcp-conformance-client`, `mcp-conformance-server`, and `mcp-json-schema-corpus` are verification
+fixtures, not sample apps.
 
 ## Samples
 
@@ -155,8 +165,11 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
 `verify.sh` runs strict formatting, warnings-as-errors Debug and Release builds, the full test suite,
-and the stdio conformance smoke flow. It uses an isolated SwiftPM scratch directory and never reads,
-deletes, or replaces the repository’s `.build`. GitHub Actions runs this gate on macOS 14.
+the pinned JSON Schema 2020-12 corpus, and the stdio conformance smoke flow. It uses isolated SwiftPM
+and corpus directories and never reads, deletes, or replaces the repository’s `.build`. The corpus
+runner validates the self-contained profile and reports external references or unsupported dialects
+as explicit skips. Set `MCP_JSON_SCHEMA_CORPUS_PATH` to a local checkout to avoid downloading the
+pinned corpus commit [`fb7372e`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/commit/fb7372e8763a1417bddc65fa4c911b3e79b57b65).
 
 `Scripts/clean.sh` removes only repository-local verification state; it leaves `.build` and
 `.swiftpm` intact. Do not commit `.build`, `.swiftpm`, `.verification`, `Artifacts`, generated ZIP files, or Finder
@@ -164,20 +177,20 @@ metadata.
 
 ## Release checklist
 
-1. Review the source inputs: `Package.swift`, `Sources/`, `Tests/`, `Scripts/`, `.github/`,
+1. Review the source inputs: `Package.swift`, `Sources/`, `Tests/`, `Scripts/`,
    `.gitignore`, `.swift-format`, both README files, and `LICENSE`.
 2. Run `SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh` from the commit intended for release.
 3. Confirm `git status --short` is empty and `git remote get-url origin` is the intended GitHub
    repository.
-4. Wait for the matching GitHub Actions revision to pass, then create and push one new semantic
-   version tag. Never move an existing tag.
+4. Confirm the pinned MCP and JSON Schema corpus revisions used by the gate, then create and push
+   one new semantic version tag. Never move an existing tag.
 5. Publish release notes from that tagged commit and use GitHub’s generated source archive rather
    than a workspace ZIP.
 
 Example tag commands, after the checks above:
 
 ```bash
-RELEASE_TAG=0.1.1
+RELEASE_TAG=0.1.3
 git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 ```

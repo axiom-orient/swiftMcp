@@ -18,6 +18,7 @@ let package = Package(
     .library(name: "MCPStdioClient", targets: ["MCPStdioClient"]),
     .library(name: "MCPStdioServer", targets: ["MCPStdioServer"]),
     .library(name: "MCPOAuth", targets: ["MCPOAuth"]),
+    .executable(name: "mcp-json-schema-corpus", targets: ["MCPJSONSchemaCorpusRunner"]),
     .executable(name: "mcp-conformance-client", targets: ["MCPConformanceClient"]),
     .executable(name: "mcp-conformance-server", targets: ["MCPConformanceServer"]),
   ],
@@ -46,6 +47,8 @@ let package = Package(
       name: "MCPOAuth",
       dependencies: ["MCP", "MCPHTTPClient", "MCPHTTPShared", "MCPPlatformCrypto"],
       swiftSettings: strictSwiftSettings),
+    .executableTarget(
+      name: "MCPJSONSchemaCorpusRunner", dependencies: ["MCP"], swiftSettings: strictSwiftSettings),
     .executableTarget(
       name: "MCPConformanceClient", dependencies: ["MCP", "MCPHTTPClient", "MCPStdioClient"],
       swiftSettings: strictSwiftSettings),

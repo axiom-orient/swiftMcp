@@ -68,6 +68,28 @@ final class MCPWireTests: XCTestCase {
     }
   }
 
+  func testErrorCodePreservesExactIntegerBeyondInt64() throws {
+    let input = Data(
+      #"{"jsonrpc":"2.0","id":1,"error":{"code":9223372036854775808,"message":"x"}}"#.utf8
+    )
+    let message = try MCPWireMessage.decode(input)
+    guard case .error(let response) = message else { return XCTFail("expected error") }
+
+    XCTAssertEqual(response.error.code.rawValue.rawValue, "9223372036854775808")
+    XCTAssertNil(response.error.code.int64Value)
+    XCTAssertEqual(try MCPRPCError(json: response.error.json), response.error)
+  }
+
+  func testErrorCodePreservesMathematicalIntegerLexeme() throws {
+    let input = Data(
+      #"{"jsonrpc":"2.0","id":1,"error":{"code":1.0,"message":"x"}}"#.utf8
+    )
+    let message = try MCPWireMessage.decode(input)
+    guard case .error(let response) = message else { return XCTFail("expected error") }
+
+    XCTAssertEqual(response.error.code.rawValue.rawValue, "1.0")
+  }
+
   func testErrorResponseMayOmitIDWhenRequestIDCannotBeRecovered() throws {
     let input = Data(
       #"{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error"}}"#.utf8)
