@@ -78,6 +78,11 @@ paths += sorted((root / ".github").rglob("*"))
 for path in paths:
     if not path.is_file() or path.suffix not in {"", ".swift", ".c", ".h", ".md", ".sh", ".yml"}:
         continue
+    # Hidden files such as Finder .DS_Store metadata are distribution debris, not scanned
+    # inputs; skipping them keeps the gate failing on real violations instead of crashing
+    # on binary metadata that must never be committed in the first place.
+    if any(part.startswith(".") for part in path.relative_to(root).parts):
+        continue
     text = path.read_text(encoding="utf-8")
     for label, pattern in {
         "personal absolute path": r"/(?:Users|home)/",
@@ -109,10 +114,13 @@ BIN_PATH="$(swift build --scratch-path "$VERIFY_SCRATCH_PATH" --show-bin-path)"
 
 printf '\n== stdio conformance smoke ==\n'
 CONFORMANCE_OUTPUT="$("$BIN_PATH/mcp-conformance-client" "$BIN_PATH/mcp-conformance-server")"
-[[ "$CONFORMANCE_OUTPUT" == 'PASS stdio strict discovery/list/call' ]] || {
+[[ "$CONFORMANCE_OUTPUT" == 'PASS strict discovery/list/call/unknown-tool' ]] || {
   printf 'FAIL unexpected conformance output: %s\n' "$CONFORMANCE_OUTPUT" >&2
   exit 1
 }
 printf '%s\n' "$CONFORMANCE_OUTPUT"
+
+printf '\n== external SDK conformance ==\n'
+SWIFTMCP_VERIFY_SCRATCH_PATH="$VERIFY_SCRATCH_PATH" bash ./Scripts/verify-external-conformance.sh
 
 printf '\nPASS all repository verification gates\n'

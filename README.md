@@ -35,11 +35,11 @@ available for ordinary error construction.
 
 ## Install
 
-Add SwiftMCP from GitHub. The current repository tag is `0.1.2`.
+Add SwiftMCP from GitHub. The current repository tag is `0.1.3`.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.2")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.3")
 ]
 ```
 
@@ -165,11 +165,19 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
 `verify.sh` runs strict formatting, warnings-as-errors Debug and Release builds, the full test suite,
-the pinned JSON Schema 2020-12 corpus, and the stdio conformance smoke flow. It uses isolated SwiftPM
-and corpus directories and never reads, deletes, or replaces the repository’s `.build`. The corpus
-runner validates the self-contained profile and reports external references or unsupported dialects
-as explicit skips. Set `MCP_JSON_SCHEMA_CORPUS_PATH` to a local checkout to avoid downloading the
-pinned corpus commit [`fb7372e`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/commit/fb7372e8763a1417bddc65fa4c911b3e79b57b65).
+the pinned JSON Schema 2020-12 corpus, the stdio conformance smoke flow, and external SDK
+conformance. It uses isolated SwiftPM and corpus directories and never reads, deletes, or replaces
+the repository’s `.build`. The corpus runner validates the self-contained profile and reports
+external references or unsupported dialects as explicit skips. Set `MCP_JSON_SCHEMA_CORPUS_PATH` to
+a local checkout to avoid downloading the pinned corpus commit
+[`fb7372e`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/commit/fb7372e8763a1417bddc65fa4c911b3e79b57b65).
+
+The external SDK conformance gate verifies both directions against a pinned official Python SDK
+revision: `mcp-conformance-client --http` drives a stateless HTTP reference server, and the SDK's
+own client drives this repository's HTTP conformance server. This cross-checks the wire format
+against an ecosystem reference implementation, not only against itself. The SDK environment is
+provisioned in an isolated venv; point `MCP_PYTHON_SDK_VENV` at a pre-built venv to reuse it
+without downloading.
 
 `Scripts/clean.sh` removes only repository-local verification state; it leaves `.build` and
 `.swiftpm` intact. Do not commit `.build`, `.swiftpm`, `.verification`, `Artifacts`, generated ZIP files, or Finder
@@ -190,7 +198,7 @@ metadata.
 Example tag commands, after the checks above:
 
 ```bash
-RELEASE_TAG=0.1.3
+RELEASE_TAG=0.1.4
 git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 ```

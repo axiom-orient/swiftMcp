@@ -35,11 +35,11 @@ English: [README.md](README.md)
 
 ## 설치
 
-GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.1.2`입니다.
+GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.1.3`입니다.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.2")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.3")
 ]
 ```
 
@@ -165,11 +165,19 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
 `verify.sh`는 엄격한 형식 검사, warnings-as-errors Debug·Release build, 전체 test, 고정된 JSON Schema
-2020-12 corpus, stdio conformance smoke를 실행합니다. 별도의 SwiftPM·corpus 디렉터리를 사용하며,
+2020-12 corpus, stdio conformance smoke, 외부 SDK conformance를 실행합니다. 별도의 SwiftPM·corpus
+디렉터리를 사용하며,
 저장소의 `.build`를 읽거나 지우거나 바꾸지 않습니다. corpus runner는 self-contained 프로필을
 검증하고 외부 reference나 지원하지 않는 dialect는 명시적으로 skip합니다. 다운로드를 피하려면
 `MCP_JSON_SCHEMA_CORPUS_PATH`에 고정 commit [`fb7372e`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/commit/fb7372e8763a1417bddc65fa4c911b3e79b57b65)의
 로컬 checkout 경로를 지정하세요.
+
+외부 SDK conformance 게이트는 고정된 공식 Python SDK revision으로 양방향을 검증합니다:
+`mcp-conformance-client --http`가 stateless HTTP 참조 서버를 통해 strict 시퀀스를 통과하는지
+확인하고, 반대로 SDK 자체 클라이언트가 이 저장소의 HTTP conformance 서버를 호출합니다.
+이 저장소의 와이어 형식이 자기 자신뿐 아니라 생태계 참조 구현과 일치함을 교차 검증합니다.
+SDK 환경은 격리된 venv에 구성되며 `MCP_PYTHON_SDK_VENV`에 미리 만든 venv 경로를 지정하면
+다운로드 없이 재사용할 수 있습니다.
 
 `Scripts/clean.sh`도 저장소 내부의 verification state만 정리하며 `.build`와 `.swiftpm`은 그대로 둡니다.
 `.build`, `.swiftpm`, `.verification`, `Artifacts`, 생성된 ZIP 파일, Finder metadata는 커밋하지
@@ -190,7 +198,7 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 위 확인이 끝난 뒤 tag를 만드는 예시는 다음과 같습니다.
 
 ```bash
-RELEASE_TAG=0.1.3
+RELEASE_TAG=0.1.4
 git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 ```

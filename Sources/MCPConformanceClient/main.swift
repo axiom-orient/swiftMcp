@@ -1,40 +1,74 @@
 import Foundation
 import MCP
+import MCPHTTPClient
 import MCPStdioClient
 
+/// Cross-implementation conformance fixture.
+///
+/// The assertion sequence is deliberately transport-agnostic and implementation-tolerant:
+/// it exercises the strict stateless surface (discovery, listing, tool call, and a negative
+/// unknown-tool path) while leaving room for legitimate peer choices such as reporting an
+/// unknown tool as an RPC error or as an `isError` result. It must pass unchanged against
+/// this repository's own fixture server and against an external reference SDK server.
 @main
 enum MCPConformanceClient {
   static func main() async throws {
-    guard CommandLine.arguments.count >= 2 else {
-      throw MCPClientError.transport("usage: mcp-conformance-client <server-executable>")
+    let arguments = CommandLine.arguments.dropFirst()
+    guard let mode = arguments.first else {
+      throw MCPClientError.transport(
+        "usage: mcp-conformance-client <server-executable> [args...] | --http <endpoint-url>")
     }
-    let transport = MCPStdioClientTransport(
-      configuration: try MCPStdioClientConfiguration(
-        executableURL: URL(fileURLWithPath: CommandLine.arguments[1]),
-        arguments: Array(CommandLine.arguments.dropFirst(2)),
-        diagnosticHandler: { line in
-          FileHandle.standardError.write(Data("server: \(line)\n".utf8))
-        }
-      ))
-    let client = try MCPClient(
-      transport: transport,
-      configuration: MCPClientConfiguration(
-        implementation: try MCPImplementation(name: "mcp-conformance-client", version: "1.0.0"),
-        capabilities: MCPClientCapabilities(),
-        requestTimeout: .seconds(5)
-      )
+    switch mode {
+    case "--http":
+      guard let rawEndpoint = arguments.dropFirst().first,
+        let endpoint = URL(string: rawEndpoint)
+      else {
+        throw MCPClientError.transport("usage: mcp-conformance-client --http <endpoint-url>")
+      }
+      let transport = MCPHTTPClientTransport(
+        configuration: try MCPHTTPClientConfiguration(endpoint: endpoint))
+      try await run(MCPClient(transport: transport, configuration: configuration()))
+    default:
+      let transport = MCPStdioClientTransport(
+        configuration: try MCPStdioClientConfiguration(
+          executableURL: URL(fileURLWithPath: mode),
+          arguments: Array(arguments.dropFirst()),
+          diagnosticHandler: { line in
+            FileHandle.standardError.write(Data("server: \(line)\n".utf8))
+          }
+        ))
+      defer { Task { await transport.shutdown() } }
+      try await run(
+        MCPClient(transport: transport, configuration: try configuration()))
+    }
+    print("PASS strict discovery/list/call/unknown-tool")
+  }
+
+  private static func configuration() throws -> MCPClientConfiguration {
+    try MCPClientConfiguration(
+      implementation: try MCPImplementation(name: "mcp-conformance-client", version: "1.0.0"),
+      capabilities: MCPClientCapabilities(),
+      requestTimeout: .seconds(10)
     )
+  }
+
+  private static func run(_ client: MCPClient) async throws {
+    // 1. Discovery advertises exactly the strict protocol version.
     let discovery = try await client.discover()
     guard discovery.supportedVersions == [MCPProtocolVersion.current.rawValue] else {
       throw MCPClientError.protocolViolation("strict protocol version was not advertised")
     }
+
+    // 2. Listing exposes the shared echo tool.
     let tools = try await client.listTools()
     guard tools.tools.contains(where: { $0.name == "echo" }) else {
       throw MCPClientError.protocolViolation("echo tool was not listed")
     }
+
+    // 3. A complete tool call round-trips the supplied text.
     let result = try await client.callTool(
       MCPCallToolParams(name: "echo", arguments: ["text": .string("conformance")]))
-    guard result.isError == false,
+    guard result.isError == false, result.resultType == .complete,
       result.content.contains(where: {
         if case .text(let text) = $0 { return text.text == "conformance" }
         return false
@@ -42,7 +76,17 @@ enum MCPConformanceClient {
     else {
       throw MCPClientError.protocolViolation("echo result did not match")
     }
-    await transport.shutdown()
-    print("PASS stdio strict discovery/list/call")
+
+    // 4. An unknown tool fails without hanging. Peers legitimately differ between an RPC
+    // error and an isError result; conformance only requires one of them.
+    do {
+      let unknown = try await client.callTool(
+        MCPCallToolParams(name: "definitely-not-registered", arguments: [:]))
+      guard unknown.isError || unknown.resultType != .complete else {
+        throw MCPClientError.protocolViolation("unknown tool unexpectedly succeeded")
+      }
+    } catch let error as MCPClientError {
+      guard case .rpc = error else { throw error }
+    }
   }
 }

@@ -30,3 +30,6 @@ DerivedData/
 *.rej
 *.log
 *~
+
+# Local agent/tooling session state; never project content.
+/.omo/
