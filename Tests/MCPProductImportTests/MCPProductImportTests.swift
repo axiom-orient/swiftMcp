@@ -1,6 +1,7 @@
 import Foundation
 import MCPHTTPClient
 import MCPStdioClient
+import MCPTasks
 import XCTest
 
 final class MCPProductImportTests: XCTestCase {
@@ -11,5 +12,6 @@ final class MCPProductImportTests: XCTestCase {
       additionalHeaders: headers
     )
     _ = MCPStdioLimits.default
+    _ = try MCPTasksExtension.clientCapabilities()
   }
 }

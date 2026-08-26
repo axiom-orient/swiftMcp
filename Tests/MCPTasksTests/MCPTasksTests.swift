@@ -1,6 +1,6 @@
+import MCP
 import XCTest
 
-import MCP
 @testable import MCPTasks
 
 final class MCPTasksModelTests: XCTestCase {
@@ -57,6 +57,48 @@ final class MCPTasksModelTests: XCTestCase {
     XCTAssertThrowsError(try MCPDetailedTask(json: .object(raw)))
   }
 
+  func testInputResponsesMayBeEmptyButMustContainObjectValues() throws {
+    let empty = try MCPUpdateTaskParams(taskID: "task-1", inputResponses: [:])
+    XCTAssertTrue(empty.inputResponses.isEmpty)
+
+    XCTAssertThrowsError(
+      try MCPUpdateTaskParams(
+        taskID: "task-1",
+        inputResponses: ["answer": .string("not-an-object")]
+      )
+    )
+  }
+
+  func testInputRequiredTaskRejectsMalformedEmbeddedRequest() throws {
+    var raw = try task(status: .inputRequired).json.objectValue ?? [:]
+    raw["inputRequests"] = .object([
+      "answer": .object(["method": .string("elicitation/create")])
+    ])
+    XCTAssertThrowsError(try MCPDetailedTask(json: .object(raw)))
+
+    raw["inputRequests"] = .object([
+      "answer": .object([
+        "method": .string("vendor/unknown"),
+        "params": .object([:]),
+      ])
+    ])
+    XCTAssertThrowsError(try MCPDetailedTask(json: .object(raw)))
+  }
+
+  func testInputResponsesRejectJSONRPCEnvelopeFields() throws {
+    XCTAssertThrowsError(
+      try MCPUpdateTaskParams(
+        taskID: "task-1",
+        inputResponses: [
+          "answer": .object([
+            "jsonrpc": .string("2.0"),
+            "result": .object([:]),
+          ])
+        ]
+      )
+    )
+  }
+
   func testCreateTaskRequiresTaskResultDiscriminator() throws {
     let created = MCPCreateTaskResult(task: try task(status: .working))
     XCTAssertEqual(try MCPCreateTaskResult(json: created.json), created)
@@ -110,13 +152,35 @@ final class MCPTasksRuntimeTests: XCTestCase {
     _ = try await client.updateTask(
       taskID: created.task.taskID,
       inputResponses: [
-        "answer": .object(["action": .string("accept"), "content": .object(["value": .string("42")])])
+        "answer": .object([
+          "action": .string("accept"), "content": .object(["value": .string("42")]),
+        ])
       ]
     )
     XCTAssertEqual(await store.updateCount, 1)
 
     _ = try await client.cancelTask(taskID: created.task.taskID)
     XCTAssertEqual(await store.cancellationCount, 1)
+  }
+
+  func testTaskCreatorWaitsForStoreVisibilityBeforeReturningHandle() async throws {
+    let store = DelayedVisibilityTaskStore(hiddenReads: 2)
+    let creator = MCPTaskCreator(
+      store: store,
+      idGenerator: FixedTaskIDGenerator(),
+      durability: try MCPTaskDurabilityPolicy(maximumReadAttempts: 3, retryDelay: .zero)
+    )
+    let seed = try MCPTask(
+      taskID: "fixed-task-id",
+      status: .working,
+      createdAt: "2026-08-26T00:00:00Z",
+      lastUpdatedAt: "2026-08-26T00:00:00Z",
+      ttlMilliseconds: MCPJSONNumber(60_000)
+    )
+
+    let result = try await creator.create(.working(seed))
+    XCTAssertEqual(result.task.taskID, "fixed-task-id")
+    XCTAssertEqual(await store.readCount, 3)
   }
 
   func testLifecycleRejectsClientWithoutTasksCapability() async throws {
@@ -154,7 +218,8 @@ final class MCPTasksRuntimeTests: XCTestCase {
       ]
     )
     var builder = try MCPTasksServer.makeBuilder(
-      implementation: MCPImplementation(name: "tasks-test-server", version: "1.0.0")
+      implementation: MCPImplementation(name: "tasks-test-server", version: "1.0.0"),
+      taskStore: store
     )
     builder.setToolResolver { name, _ in name == tool.name ? tool : nil }
     try builder.register(MCPStandardMethods.listTools) { _, _ in
@@ -179,7 +244,6 @@ final class MCPTasksRuntimeTests: XCTestCase {
       )
       return .task(try await creator.create(.working(seed)))
     }
-    try MCPTasksServer.registerLifecycle(on: &builder, store: store)
     return try builder.build()
   }
 }
@@ -199,6 +263,30 @@ private struct InProcessTransport: MCPClientTransport {
 
 private struct FixedTaskIDGenerator: MCPTaskIDGenerating {
   func nextTaskID() async throws -> String { "fixed-task-id" }
+}
+
+private actor DelayedVisibilityTaskStore: MCPTaskStore {
+  private let hiddenReads: Int
+  private var stored: MCPDetailedTask?
+  private(set) var readCount = 0
+
+  init(hiddenReads: Int) { self.hiddenReads = hiddenReads }
+
+  func create(_ task: MCPDetailedTask) async throws { stored = task }
+
+  func task(taskID: String) async throws -> MCPDetailedTask? {
+    readCount += 1
+    guard readCount > hiddenReads, stored?.task.taskID == taskID else { return nil }
+    return stored
+  }
+
+  func update(taskID: String, inputResponses: [String: MCPJSONValue]) async throws -> Bool {
+    stored?.task.taskID == taskID
+  }
+
+  func requestCancellation(taskID: String) async throws -> Bool {
+    stored?.task.taskID == taskID
+  }
 }
 
 private actor TestTaskStore: MCPTaskStore {

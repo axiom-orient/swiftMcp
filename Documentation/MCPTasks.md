@@ -86,7 +86,8 @@ import MCP
 import MCPTasks
 
 var builder = try MCPTasksServer.makeBuilder(
-  implementation: MCPImplementation(name: "example-server", version: "1.0.0")
+  implementation: MCPImplementation(name: "example-server", version: "1.0.0"),
+  taskStore: durableStore
 )
 
 builder.setToolResolver { name, _ in name == longWork.name ? longWork : nil }
@@ -115,9 +116,12 @@ try MCPTasksServer.registerCallTool(on: &builder, store: durableStore) {
   worker.start(taskID: taskID)
   return .task(result)
 }
-try MCPTasksServer.registerLifecycle(on: &builder, store: durableStore)
 let server = try builder.build()
 ```
+
+`MCPTasksServer.makeBuilder` requires the durable store and installs all lifecycle handlers before
+advertising the Tasks extension. This prevents a server from claiming Tasks support while omitting
+`tasks/get`, `tasks/update`, or `tasks/cancel`.
 
 `MCPTaskCreator.create` does not return a handle until the task can be read through the same store
 used by `tasks/get`. Its bounded durability policy supports eventually-consistent stores without

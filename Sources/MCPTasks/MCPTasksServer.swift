@@ -128,28 +128,32 @@ public struct MCPTaskCreator: Sendable {
   }
 }
 
-public typealias MCPTasksToolHandler = @Sendable (
-  _ params: MCPCallToolParams,
-  _ context: MCPRequestContext,
-  _ taskCreator: MCPTaskCreator?
-) async throws -> MCPTasksCallToolResult
+public typealias MCPTasksToolHandler =
+  @Sendable (
+    _ params: MCPCallToolParams,
+    _ context: MCPRequestContext,
+    _ taskCreator: MCPTaskCreator?
+  ) async throws -> MCPTasksCallToolResult
 
 public enum MCPTasksServer {
   /// Constructs a core server builder with the official Tasks extension methods and discovery
   /// capability. The caller still registers the endpoint's tools/list handler and tool resolver.
   public static func makeBuilder(
     implementation: MCPImplementation,
+    taskStore: any MCPTaskStore,
     instructions: String? = nil,
     configuration: MCPServerConfiguration = MCPServerConfiguration(),
     extensions: [String: MCPJSONValue] = [:]
   ) throws -> MCPServerBuilder {
-    try MCPServerBuilder(
+    var builder = try MCPServerBuilder(
       implementation: implementation,
       instructions: instructions,
       configuration: configuration,
       extensionMethods: MCPTasksExtension.extensionMethods(),
       extensions: MCPTasksExtension.serverExtensions(extending: extensions)
     )
+    try registerLifecycle(on: &builder, store: taskStore)
+    return builder
   }
 
   /// Registers task-aware tools/call. If the client omitted the Tasks capability, the handler gets
@@ -181,7 +185,7 @@ public enum MCPTasksServer {
     }
   }
 
-  public static func registerLifecycle(
+  private static func registerLifecycle(
     on builder: inout MCPServerBuilder,
     store: any MCPTaskStore
   ) throws {

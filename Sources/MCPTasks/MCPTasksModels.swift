@@ -263,6 +263,7 @@ public enum MCPDetailedTask: Sendable, Hashable, MCPJSONModel {
         throw MCPJSONError.invalidField(
           field: "inputRequests", reason: "must contain at least one outstanding request")
       }
+      try MCPTasksValidation.validateInputRequests(requests)
       self = .inputRequired(task, inputRequests: requests)
     case .completed:
       guard !hasInput, !hasError else {
@@ -420,10 +421,11 @@ public struct MCPUpdateTaskParams: Sendable, Hashable, MCPJSONModel {
     guard !taskID.isEmpty else {
       throw MCPJSONError.invalidField(field: "taskId", reason: "must not be empty")
     }
-    guard !inputResponses.isEmpty, inputResponses.keys.allSatisfy({ !$0.isEmpty }) else {
+    guard inputResponses.keys.allSatisfy({ !$0.isEmpty }) else {
       throw MCPJSONError.invalidField(
-        field: "inputResponses", reason: "must contain non-empty response keys")
+        field: "inputResponses", reason: "response keys must not be empty")
     }
+    try MCPTasksValidation.validateInputResponses(inputResponses)
     self.taskID = taskID
     self.inputResponses = inputResponses
   }
@@ -523,6 +525,41 @@ private enum MCPTasksValidation {
   static func validateTimestamp(_ value: String, field: String) throws {
     guard !value.isEmpty, isISO8601(value) else {
       throw MCPJSONError.invalidField(field: field, reason: "must be an ISO 8601 timestamp")
+    }
+  }
+
+  static func validateInputRequests(_ requests: [String: MCPJSONValue]) throws {
+    guard requests.keys.allSatisfy({ !$0.isEmpty }) else {
+      throw MCPJSONError.invalidField(
+        field: "inputRequests", reason: "request keys must not be empty")
+    }
+    for (key, value) in requests {
+      let request = try MCPJSONObject(value)
+      let method = try request.requiredNonEmptyString("method")
+      guard ["sampling/createMessage", "roots/list", "elicitation/create"].contains(method) else {
+        throw MCPJSONError.invalidField(
+          field: "inputRequests.\(key).method", reason: "unsupported input request method")
+      }
+      _ = try request.requiredObject("params")
+      if request.values["id"] != nil || request.values["jsonrpc"] != nil {
+        throw MCPJSONError.invalidField(
+          field: "inputRequests.\(key)",
+          reason: "embedded requests contain method and params only")
+      }
+    }
+  }
+
+  static func validateInputResponses(_ responses: [String: MCPJSONValue]) throws {
+    for (key, value) in responses {
+      guard case .object(let response) = value else {
+        throw MCPJSONError.invalidField(
+          field: "inputResponses.\(key)", reason: "response must be an object")
+      }
+      if response["id"] != nil || response["jsonrpc"] != nil {
+        throw MCPJSONError.invalidField(
+          field: "inputResponses.\(key)",
+          reason: "embedded responses contain result fields only")
+      }
     }
   }
 
