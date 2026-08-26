@@ -33,6 +33,7 @@ public enum MCPHTTPNameSource: String, Sendable, Hashable {
   case toolName
   case promptName
   case resourceURI
+  case taskID
 }
 
 public struct MCPMethodDescriptor: Sendable, Hashable {
@@ -45,6 +46,9 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
   public let allowsMRTR: Bool
   public let extensionResultTypes: Set<String>
   public let isExtension: Bool
+  /// Identifies the MCP extension that owns an otherwise core-shaped method or augments a
+  /// standard method. Namespaced vendor methods may continue to omit this value.
+  public let extensionIdentifier: String?
 
   public init(
     name: String,
@@ -55,12 +59,24 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
     httpNameSource: MCPHTTPNameSource = .none,
     allowsMRTR: Bool = false,
     extensionResultTypes: Set<String> = [],
-    isExtension: Bool = false
+    isExtension: Bool = false,
+    extensionIdentifier: String? = nil
   ) throws {
-    guard MCPMethodRegistry.isValidMethodName(name, extensionMethod: false),
-      !isExtension || !MCPMethodRegistry.isRetiredCoreMethodName(name)
-    else {
+    let namespacedExtension = MCPMethodRegistry.isValidMethodName(name, extensionMethod: true)
+    let officialExtensionMethod =
+      isExtension && extensionIdentifier != nil
+      && MCPMethodRegistry.isValidMethodName(name, extensionMethod: false)
+    let validName = isExtension ? namespacedExtension || officialExtensionMethod
+      : MCPMethodRegistry.isValidMethodName(name, extensionMethod: false)
+    guard validName, !isExtension || !MCPMethodRegistry.isRetiredCoreMethodName(name) else {
       throw MCPRegistryError.invalidMethodName(name)
+    }
+    if let extensionIdentifier {
+      guard isExtension,
+        MCPMethodRegistry.isValidExtensionIdentifier(extensionIdentifier)
+      else {
+        throw MCPRegistryError.invalidExtensionIdentifier(extensionIdentifier)
+      }
     }
     guard
       extensionResultTypes.allSatisfy({ !$0.isEmpty && $0 != "complete" && $0 != "input_required" })
@@ -76,7 +92,8 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
       httpNameSource: httpNameSource,
       allowsMRTR: allowsMRTR,
       extensionResultTypes: extensionResultTypes,
-      isExtension: isExtension
+      isExtension: isExtension,
+      extensionIdentifier: extensionIdentifier
     )
   }
 
@@ -89,7 +106,8 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
     httpNameSource: MCPHTTPNameSource = .none,
     allowsMRTR: Bool = false,
     extensionResultTypes: Set<String> = [],
-    isExtension: Bool = false
+    isExtension: Bool = false,
+    extensionIdentifier: String? = nil
   ) {
     self.name = name
     self.direction = direction
@@ -100,6 +118,7 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
     self.allowsMRTR = allowsMRTR
     self.extensionResultTypes = extensionResultTypes
     self.isExtension = isExtension
+    self.extensionIdentifier = extensionIdentifier
   }
 
   public func accepts(_ requestedDirection: MCPMethodDirection) -> Bool {
@@ -115,6 +134,7 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
     case .none: return nil
     case .toolName, .promptName: key = "name"
     case .resourceURI: key = "uri"
+    case .taskID: key = "taskId"
     }
     guard case .string(let value)? = params[key], !value.isEmpty else {
       throw MCPJSONError.invalidField(field: key, reason: "required for Mcp-Name")
@@ -136,18 +156,24 @@ public struct MCPMethod<Params: MCPJSONModel, Result: MCPJSONModel>: Sendable {
 
 public enum MCPRegistryError: Error, Sendable, Equatable, CustomStringConvertible {
   case invalidMethodName(String)
+  case invalidExtensionIdentifier(String)
   case invalidExtensionResultType
   case duplicateMethod(String)
   case standardMethodCollision(String)
+  case invalidStandardAugmentation(String)
   case unsupportedMethod(String)
   case wrongDirection(method: String, expected: MCPMethodDirection, actual: MCPMethodDirection)
 
   public var description: String {
     switch self {
     case .invalidMethodName(let name): "Invalid MCP method name: \(name)"
+    case .invalidExtensionIdentifier(let identifier):
+      "Invalid MCP extension identifier: \(identifier)"
     case .invalidExtensionResultType: "Invalid extension resultType"
     case .duplicateMethod(let name): "Duplicate MCP method: \(name)"
     case .standardMethodCollision(let name): "Extension collides with standard method: \(name)"
+    case .invalidStandardAugmentation(let name):
+      "Invalid extension augmentation of standard MCP method: \(name)"
     case .unsupportedMethod(let name): "Unsupported MCP method: \(name)"
     case .wrongDirection(let method, let expected, let actual):
       "MCP method \(method) has direction \(actual.rawValue), expected \(expected.rawValue)"
@@ -165,10 +191,14 @@ public struct MCPMethodRegistry: Sendable {
       guard descriptor.isExtension else {
         throw MCPRegistryError.invalidMethodName(descriptor.name)
       }
-      guard Self.standardDescriptorNames.contains(descriptor.name) == false else {
-        throw MCPRegistryError.standardMethodCollision(descriptor.name)
+      if let standard = result[descriptor.name], Self.standardDescriptorNames.contains(descriptor.name) {
+        guard descriptor.extensionIdentifier != nil else {
+          throw MCPRegistryError.standardMethodCollision(descriptor.name)
+        }
+        result[descriptor.name] = try Self.augment(standard: standard, with: descriptor)
+        continue
       }
-      guard Self.isValidMethodName(descriptor.name, extensionMethod: true) else {
+      guard Self.isValidMethodName(name: descriptor.name, descriptor: descriptor) else {
         throw MCPRegistryError.invalidMethodName(descriptor.name)
       }
       guard result[descriptor.name] == nil else {
@@ -228,6 +258,54 @@ public struct MCPMethodRegistry: Sendable {
       return value.contains(".") || parts.count >= 3
     }
     return true
+  }
+
+  public static func isValidExtensionIdentifier(_ value: String) -> Bool {
+    let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return false }
+    let labels = parts[0].split(separator: ".", omittingEmptySubsequences: false)
+    guard labels.count >= 2, labels.allSatisfy(isValidExtensionPrefixLabel) else { return false }
+    return isValidExtensionName(parts[1])
+  }
+
+  private static func isValidMethodName(
+    name: String,
+    descriptor: MCPMethodDescriptor
+  ) -> Bool {
+    isValidMethodName(name, extensionMethod: true)
+      || (descriptor.extensionIdentifier != nil
+        && isValidMethodName(name, extensionMethod: false))
+  }
+
+  private static func augment(
+    standard: MCPMethodDescriptor,
+    with extensionDescriptor: MCPMethodDescriptor
+  ) throws -> MCPMethodDescriptor {
+    guard let extensionIdentifier = extensionDescriptor.extensionIdentifier,
+      isValidExtensionIdentifier(extensionIdentifier),
+      !extensionDescriptor.extensionResultTypes.isEmpty,
+      extensionDescriptor.direction == standard.direction,
+      extensionDescriptor.requiredServerCapability == standard.requiredServerCapability,
+      extensionDescriptor.requiredClientCapability == standard.requiredClientCapability,
+      extensionDescriptor.cacheability == standard.cacheability,
+      extensionDescriptor.httpNameSource == standard.httpNameSource,
+      extensionDescriptor.allowsMRTR == standard.allowsMRTR
+    else {
+      throw MCPRegistryError.invalidStandardAugmentation(standard.name)
+    }
+    return MCPMethodDescriptor(
+      validatedName: standard.name,
+      direction: standard.direction,
+      requiredServerCapability: standard.requiredServerCapability,
+      requiredClientCapability: standard.requiredClientCapability,
+      cacheability: standard.cacheability,
+      httpNameSource: standard.httpNameSource,
+      allowsMRTR: standard.allowsMRTR,
+      extensionResultTypes: standard.extensionResultTypes.union(
+        extensionDescriptor.extensionResultTypes),
+      isExtension: false,
+      extensionIdentifier: nil
+    )
   }
 
   // These MCP-owned method names existed before the stateless 2026-07-28 core. They are not
@@ -312,6 +390,30 @@ public struct MCPMethodRegistry: Sendable {
   private static func bidirectionalNotification(_ name: String) -> MCPMethodDescriptor {
     MCPMethodDescriptor(validatedName: name, direction: .bidirectionalNotification)
   }
+
+  private static func isValidExtensionPrefixLabel(_ value: Substring) -> Bool {
+    guard let first = value.utf8.first, let last = value.utf8.last,
+      isASCIIAlpha(first), isASCIIAlphanumeric(last)
+    else { return false }
+    return value.utf8.allSatisfy { isASCIIAlphanumeric($0) || $0 == 0x2D }
+  }
+
+  private static func isValidExtensionName(_ value: Substring) -> Bool {
+    guard let first = value.utf8.first, let last = value.utf8.last,
+      isASCIIAlphanumeric(first), isASCIIAlphanumeric(last)
+    else { return false }
+    return value.utf8.allSatisfy {
+      isASCIIAlphanumeric($0) || $0 == 0x2D || $0 == 0x5F || $0 == 0x2E
+    }
+  }
+
+  private static func isASCIIAlpha(_ value: UInt8) -> Bool {
+    (0x41...0x5A).contains(value) || (0x61...0x7A).contains(value)
+  }
+
+  private static func isASCIIAlphanumeric(_ value: UInt8) -> Bool {
+    isASCIIAlpha(value) || (0x30...0x39).contains(value)
+  }
 }
 
 public enum MCPStandardMethods {
@@ -336,4 +438,5 @@ public enum MCPStandardMethods {
     MCPMethodRegistry.completeDescriptor)
   public static let listen = MCPMethod<MCPSubscriptionsListenParams, MCPSubscriptionsListenResult>(
     MCPMethodRegistry.listenDescriptor)
+  }
 }
