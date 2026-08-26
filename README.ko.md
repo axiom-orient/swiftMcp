@@ -15,7 +15,10 @@ English: [README.md](README.md)
 - MCP `2026-07-28`만 지원합니다. 모든 요청에는 자체 protocol metadata와 capabilities가 포함됩니다.
 - HTTP 연결과 stdio 프로세스는 전송 수단일 뿐 MCP session이 아닙니다.
 - 제공 범위는 discovery, tools, prompts, resources, completion, progress, cancellation,
-  subscriptions, MRTR, cache 계약, 범위가 제한된 JSON Schema 검증입니다.
+  subscriptions, MRTR, cache 계약, 범위가 제한된 JSON Schema 검증, 선택적인 `MCPTasks` 제품입니다.
+- `MCPTasks`는 Stable 2026-07-28 Tasks 확장의 요청별 capability·authorization 검사를 구현합니다.
+  호스트 소유 durable store가 필수이며 production in-memory fallback은 없습니다. 자세한 내용은
+  [Documentation/MCPTasks.md](Documentation/MCPTasks.md)를 참고하세요.
 - `initialize`, session header, legacy transport, migration, downgrade 동작, JSON-RPC batch,
   server-originated request, 자동 OAuth 재시도는 제공하지 않습니다.
 - `MCPOAuth`는 선택 기능입니다. HTTP authorization, TLS 종료, 브라우저 UI, callback, credential
@@ -66,6 +69,7 @@ product를 지정할 때는 `swiftmcp` 패키지 식별자를 사용합니다.
 | 제품 | 용도 |
 | --- | --- |
 | `MCP` | protocol model, JSON-RPC wire codec, stateless runtime, schema validation, MRTR, subscriptions, cache 계약 |
+| `MCPTasks` | Stable 2026-07-28 Tasks 확장 model, client helper, durable-store 기반 server lifecycle |
 | `MCPHTTPClient` / `MCPHTTPServer` | 요청별 HTTP POST와 JSON 또는 SSE 응답 |
 | `MCPStdioClient` / `MCPStdioServer` | 자식 프로세스 stdio 전송과 server runner |
 | `MCPOAuth` | 선택적인 OAuth client discovery와 token 흐름 |

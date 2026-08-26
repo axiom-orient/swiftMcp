@@ -33,6 +33,9 @@ public enum MCPServerBuildError: Error, Sendable, Equatable, CustomStringConvert
   case incompleteFeature(String)
   case invalidHandlerDirection(String)
   case invalidConfiguration(String)
+  /// Official extension descriptors and capabilities must be installed by their owning product's
+  /// validated package registration, never through the raw public server builder.
+  case untrustedOfficialExtension(String)
 
   public var description: String {
     switch self {
@@ -42,6 +45,8 @@ public enum MCPServerBuildError: Error, Sendable, Equatable, CustomStringConvert
       "Handler method is not a client-to-server request: \(method)"
     case .invalidConfiguration(let reason):
       "Invalid server configuration: \(reason)"
+    case .untrustedOfficialExtension(let identifier):
+      "Official MCP extension \(identifier) requires validated package registration"
     }
   }
 }
@@ -120,7 +125,35 @@ public struct MCPServerBuilder: Sendable {
   public let implementation: MCPImplementation
   public var instructions: String?
   public var configuration: MCPServerConfiguration
-  public var extensions: [String: MCPJSONValue]
+  private var extensionValues: [String: MCPJSONValue]
+  private var trustedOfficialCapabilities: [String: MCPJSONValue]
+  private var trustedOfficialMethodNames: [String: Set<String>]
+  private var rejectedOfficialCapabilityMutation: String?
+
+  /// The capabilities currently configured on this builder. Official extension capabilities are
+  /// reserved for the owning product's validated registration and cannot be introduced by this
+  /// public mutation surface.
+  public var extensions: [String: MCPJSONValue] {
+    get { extensionValues }
+    set {
+      let rejectedIdentifier = newValue.keys.sorted().first {
+        MCPMethodRegistry.isOfficialExtensionIdentifier($0)
+          && trustedOfficialCapabilities[$0] == nil
+      }
+      if let rejectedIdentifier, rejectedOfficialCapabilityMutation == nil {
+        rejectedOfficialCapabilityMutation = rejectedIdentifier
+      }
+
+      var values = newValue
+      if let rejectedIdentifier {
+        values.removeValue(forKey: rejectedIdentifier)
+      }
+      for (identifier, capability) in trustedOfficialCapabilities {
+        values[identifier] = capability
+      }
+      extensionValues = values
+    }
+  }
 
   private var registry: MCPMethodRegistry
   private var handlers: [String: MCPAnyRequestHandler]
@@ -137,10 +170,26 @@ public struct MCPServerBuilder: Sendable {
     extensionMethods: [MCPMethodDescriptor] = [],
     extensions: [String: MCPJSONValue] = [:]
   ) throws {
+    let officialDescriptor =
+      extensionMethods
+      .sorted(by: { $0.name < $1.name })
+      .first(where: MCPMethodRegistry.isOfficialExtensionDescriptor)
+    if let descriptor = officialDescriptor {
+      throw MCPServerBuildError.untrustedOfficialExtension(
+        descriptor.extensionIdentifier ?? descriptor.name)
+    }
+    let officialCapabilityIdentifier = extensions.keys.sorted().first(
+      where: MCPMethodRegistry.isOfficialExtensionIdentifier)
+    if let identifier = officialCapabilityIdentifier {
+      throw MCPServerBuildError.untrustedOfficialExtension(identifier)
+    }
     self.implementation = implementation
     self.instructions = instructions
     self.configuration = configuration
-    self.extensions = extensions
+    self.extensionValues = extensions
+    self.trustedOfficialCapabilities = [:]
+    self.trustedOfficialMethodNames = [:]
+    self.rejectedOfficialCapabilityMutation = nil
     self.registry = try MCPMethodRegistry(extensionMethods: extensionMethods)
     self.handlers = [:]
     self.toolListChanged = false
@@ -151,11 +200,51 @@ public struct MCPServerBuilder: Sendable {
     _ = try MCPServerCapabilities(extensions: extensions)
   }
 
+  /// Installs an official extension atomically with its validated descriptors and capability.
+  /// This initializer is package-scoped so only a product in this Swift package that has created
+  /// a `MCPOfficialExtensionRegistration` can own the official namespace.
+  package init(
+    implementation: MCPImplementation,
+    instructions: String? = nil,
+    configuration: MCPServerConfiguration = MCPServerConfiguration(),
+    officialExtension: MCPOfficialExtensionRegistration,
+    extensions: [String: MCPJSONValue] = [:]
+  ) throws {
+    let officialCapabilityIdentifier = extensions.keys.sorted().first(
+      where: MCPMethodRegistry.isOfficialExtensionIdentifier)
+    if let identifier = officialCapabilityIdentifier {
+      throw MCPServerBuildError.untrustedOfficialExtension(identifier)
+    }
+    var installedExtensions = extensions
+    installedExtensions[officialExtension.identifier] = officialExtension.capability
+
+    self.implementation = implementation
+    self.instructions = instructions
+    self.configuration = configuration
+    self.extensionValues = installedExtensions
+    self.trustedOfficialCapabilities = [
+      officialExtension.identifier: officialExtension.capability
+    ]
+    self.trustedOfficialMethodNames = [
+      officialExtension.identifier: Set(officialExtension.methods.map(\.name))
+    ]
+    self.rejectedOfficialCapabilityMutation = nil
+    self.registry = try MCPMethodRegistry(extensionMethods: officialExtension.methods)
+    self.handlers = [:]
+    self.toolListChanged = false
+    self.promptListChanged = false
+    self.resourceListChanged = false
+    self.resourceSubscriptions = false
+    self.toolResolver = nil
+    _ = try MCPServerCapabilities(extensions: installedExtensions)
+  }
+
   public mutating func register<Params: MCPJSONModel, Result: MCPJSONModel>(
     _ method: MCPMethod<Params, Result>,
     handler: @escaping @Sendable (Params, MCPRequestContext) async throws -> Result
   ) throws {
     let descriptor = method.descriptor
+    try validateOfficialDescriptorOwnership(descriptor)
     guard descriptor.direction == .clientToServerRequest else {
       throw MCPServerBuildError.invalidHandlerDirection(descriptor.name)
     }
@@ -244,6 +333,7 @@ public struct MCPServerBuilder: Sendable {
   public func build(diagnostics: any MCPDiagnosticSink = MCPNoopDiagnosticSink()) throws
     -> MCPServer
   {
+    try validateOfficialCapabilityState()
     try validateConfiguration()
     try validateFeatureCompleteness()
     let capabilities = try deriveCapabilities()
@@ -257,6 +347,27 @@ public struct MCPServerBuilder: Sendable {
       capabilities: capabilities,
       diagnostics: diagnostics
     )
+  }
+
+  private func validateOfficialCapabilityState() throws {
+    if let identifier = rejectedOfficialCapabilityMutation {
+      throw MCPServerBuildError.untrustedOfficialExtension(identifier)
+    }
+    for (identifier, capability) in trustedOfficialCapabilities {
+      guard extensionValues[identifier] == capability else {
+        throw MCPServerBuildError.untrustedOfficialExtension(identifier)
+      }
+    }
+  }
+
+  private func validateOfficialDescriptorOwnership(_ descriptor: MCPMethodDescriptor) throws {
+    guard MCPMethodRegistry.isOfficialExtensionDescriptor(descriptor) else { return }
+    guard let identifier = descriptor.extensionIdentifier,
+      trustedOfficialMethodNames[identifier]?.contains(descriptor.name) == true
+    else {
+      throw MCPServerBuildError.untrustedOfficialExtension(
+        descriptor.extensionIdentifier ?? descriptor.name)
+    }
   }
 
   private func validateConfiguration() throws {
@@ -316,7 +427,7 @@ public struct MCPServerBuilder: Sendable {
       resourceListChanged: resourceListChanged,
       resourceSubscriptions: resourceSubscriptions,
       completions: methods.contains("completion/complete"),
-      extensions: extensions
+      extensions: extensionValues
     )
   }
 }
@@ -1042,7 +1153,16 @@ public struct MCPServer: Sendable {
       try validateInputRequirements(
         result["inputRequests"], capabilities: requestMetadata.clientCapabilities)
     }
-    if descriptor.cacheability == .none,
+    // Extension result types own their payload fields. A task handle, for example, must carry
+    // `ttlMs` even though tools/call itself is not cacheable; do not mistake that extension field
+    // for the core cache metadata pair.
+    let isExtensionResult: Bool
+    if case .extensionValue = resultType {
+      isExtensionResult = true
+    } else {
+      isExtensionResult = false
+    }
+    if descriptor.cacheability == .none, !descriptor.isExtension, !isExtensionResult,
       result["ttlMs"] != nil || result["cacheScope"] != nil
     {
       throw MCPJSONError.invalidField(

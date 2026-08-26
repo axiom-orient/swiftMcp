@@ -15,7 +15,11 @@ external SwiftPM dependencies.
 - MCP `2026-07-28` only. Every request carries its own protocol metadata and capabilities.
 - HTTP connections and stdio processes are transports, not MCP sessions.
 - Supported product surface: discovery, tools, prompts, resources, completion, progress,
-  cancellation, subscriptions, MRTR, cache contracts, and bounded JSON Schema validation.
+  cancellation, subscriptions, MRTR, cache contracts, bounded JSON Schema validation, and the
+  optional `MCPTasks` product.
+- `MCPTasks` implements the Stable 2026-07-28 Tasks extension with request-scoped capability and
+  authorization checks. A host-owned durable store is required; there is no production in-memory
+  fallback. See [Documentation/MCPTasks.md](Documentation/MCPTasks.md).
 - Not included: `initialize`, session headers, legacy transports, migration, downgrade behavior,
   JSON-RPC batch, server-originated requests, or automatic OAuth retries.
 - `MCPOAuth` is optional. HTTP authorization, TLS termination, browser UI, callbacks, credential
@@ -66,6 +70,7 @@ For a local checkout, use a relative path that matches your workspace:
 | Product | Purpose |
 | --- | --- |
 | `MCP` | Protocol models, JSON-RPC wire codec, stateless runtime, schema validation, MRTR, subscriptions, and cache contracts |
+| `MCPTasks` | Stable 2026-07-28 Tasks extension models, client helpers, and durable-store-bound server lifecycle |
 | `MCPHTTPClient` / `MCPHTTPServer` | Request-scoped HTTP POST with JSON or SSE responses |
 | `MCPStdioClient` / `MCPStdioServer` | Child-process stdio transport and server runner |
 | `MCPOAuth` | Optional OAuth client discovery and token flow |
