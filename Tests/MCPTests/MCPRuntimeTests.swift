@@ -645,7 +645,7 @@ final class MCPRuntimeTests: XCTestCase {
       reference: .prompt(name: "prompt"),
       argument: MCPCompletionArgument(name: "value", value: "x")
     )
-    for code: Int64 in [-32002, -32042, -32023] {
+    for code: MCPRPCErrorCode in [-32002, -32042, -32023] {
       var builder = try MCPServerBuilder(implementation: implementation("reserved-error"))
       try builder.register(MCPStandardMethods.complete) { _, _ -> MCPCompleteResult in
         throw MCPRPCError(code: code, message: "must not escape")
@@ -661,6 +661,13 @@ final class MCPRuntimeTests: XCTestCase {
         XCTAssertEqual(rpc, .internalError)
       }
     }
+  }
+
+  func testRPCErrorUsesCanonicalTypedCodeInitializer() {
+    let code = MCPRPCErrorCode(-32002)
+    let error = MCPRPCError(code: code, message: "typed")
+
+    XCTAssertEqual(error.code, code)
   }
 
   func testClientValidatesKnownToolInputAndStructuredOutput() async throws {

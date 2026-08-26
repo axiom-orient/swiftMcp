@@ -33,16 +33,38 @@ private struct HTTPTaskAuthorizationVerifier: MCPHTTPAuthorizationVerifier {
 }
 
 final class MCPTasksModelTests: XCTestCase {
+  func testTasksClientRejectsMismatchedTransportRegistry() throws {
+    let transport = MCPHTTPClientTransport(
+      configuration: try MCPHTTPClientConfiguration(
+        endpoint: URL(string: "https://example.com/mcp")!
+      ),
+      registry: .standard
+    )
+    let configuration = try MCPClientConfiguration(
+      implementation: MCPImplementation(name: "tasks-client", version: "1.0.0"),
+      capabilities: try MCPTasksExtension.clientCapabilities()
+    )
+
+    XCTAssertThrowsError(
+      try MCPTasksClient(transport: transport, configuration: configuration),
+      "A Tasks client must reject a transport whose registry omits Tasks methods"
+    ) { error in
+      XCTAssertEqual(error as? MCPRegistryError, .registryMismatch)
+    }
+  }
+
   func testExtensionRegistryAugmentsToolsAndRegistersLifecycleMethods() throws {
     let registry = try MCPTasksExtension.methodRegistry()
     let callTool = try registry.require("tools/call")
-    XCTAssertTrue(callTool.extensionResultTypes.contains("task"))
+    XCTAssertEqual(callTool.extensionResultTypes, ["task"])
+    XCTAssertFalse(callTool.isExtension)
+    XCTAssertNil(callTool.extensionIdentifier)
     XCTAssertEqual(
       try registry.require("tasks/get").httpName(from: ["taskId": .string("task-1")]),
       "task-1"
     )
-    XCTAssertEqual(try registry.require("tasks/update").httpNameSource, .taskID)
-    XCTAssertEqual(try registry.require("tasks/cancel").httpNameSource, .taskID)
+    XCTAssertEqual(try registry.require("tasks/update").httpNameSource, .parameter("taskId"))
+    XCTAssertEqual(try registry.require("tasks/cancel").httpNameSource, .parameter("taskId"))
   }
 
   func testDetailedTaskRoundTripsEveryState() throws {
@@ -128,7 +150,7 @@ final class MCPTasksModelTests: XCTestCase {
     XCTAssertThrowsError(
       try MCPServerBuilder(
         implementation: MCPImplementation(name: "raw-tasks-methods", version: "1.0.0"),
-        extensionMethods: MCPTasksExtension.extensionMethods()
+        extensionMethods: [try MCPTasksMethods.get.descriptor]
       )
     ) { error in
       XCTAssertEqual(
@@ -140,7 +162,7 @@ final class MCPTasksModelTests: XCTestCase {
     XCTAssertThrowsError(
       try MCPServerBuilder(
         implementation: MCPImplementation(name: "raw-tasks-capability", version: "1.0.0"),
-        extensions: MCPTasksExtension.serverExtensions()
+        extensions: [MCPTasksExtension.identifier: .object([:])]
       )
     ) { error in
       XCTAssertEqual(
@@ -155,7 +177,7 @@ final class MCPTasksModelTests: XCTestCase {
       implementation: MCPImplementation(name: "raw-mutation", version: "1.0.0")
     )
 
-    builder.extensions = MCPTasksExtension.serverExtensions()
+    builder.extensions = [MCPTasksExtension.identifier: .object([:])]
     XCTAssertNil(builder.extensions[MCPTasksExtension.identifier])
     XCTAssertThrowsError(try builder.build()) { error in
       XCTAssertEqual(
@@ -309,6 +331,101 @@ final class MCPTasksModelTests: XCTestCase {
       try MCPUpdateTaskParams(
         taskID: "task-1",
         inputResponses: ["answer": .string("not-an-object")]
+      )
+    )
+  }
+
+  func testUnknownInputResponsePreservesValidElicitationObjectShape() throws {
+    let raw = MCPJSONValue.object([
+      "action": .string("accept"),
+      "content": .object([
+        "vendorField": .array([.string("preserved")]),
+        "count": .number(MCPJSONNumber(7)),
+      ]),
+      "vendorMetadata": .object(["enabled": .bool(true)]),
+    ])
+    let response = try MCPUpdateTaskParams(
+      taskID: "task-1",
+      inputResponses: ["vendor/input": raw]
+    )
+
+    XCTAssertEqual(response.inputResponses["vendor/input"], raw)
+    XCTAssertEqual(try MCPUpdateTaskParams(json: response.json), response)
+  }
+
+  func testUnknownInputResponseRejectsObjectOutsideStableUnion() throws {
+    XCTAssertThrowsError(
+      try MCPUpdateTaskParams(
+        taskID: "task-1",
+        inputResponses: ["vendor/input": .object(["vendorField": .bool(true)])]
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? MCPJSONError,
+        .invalidField(
+          field: "inputResponses.vendor/input",
+          reason: "must be a valid ElicitResult, ListRootsResult, or CreateMessageResult")
+      )
+    }
+  }
+
+  func testInputResponsesAcceptEveryStableUnionMember() throws {
+    let responses = try MCPUpdateTaskParams(
+      taskID: "task-1",
+      inputResponses: [
+        "elicitation": .object(["action": .string("decline")]),
+        "roots": .object([
+          "roots": .array([.object(["uri": .string("file:///workspace")])])
+        ]),
+        "sampling": .object([
+          "content": .object(["type": .string("text"), "text": .string("sampled")]),
+          "model": .string("fixture-model"),
+          "role": .string("assistant"),
+        ]),
+      ]
+    )
+
+    XCTAssertEqual(responses.inputResponses.count, 3)
+  }
+
+  func testInputResponsesRejectMalformedElicitationResult() throws {
+    XCTAssertThrowsError(
+      try MCPUpdateTaskParams(
+        taskID: "task-1",
+        inputResponses: [
+          "elicitation": .object([
+            "action": .string("accept"),
+            "content": .object(["answer": .object([:])]),
+          ])
+        ]
+      )
+    )
+  }
+
+  func testInputResponsesRejectMalformedRootsResult() throws {
+    XCTAssertThrowsError(
+      try MCPUpdateTaskParams(
+        taskID: "task-1",
+        inputResponses: [
+          "roots": .object([
+            "roots": .array([.object(["uri": .number(MCPJSONNumber(7))])])
+          ])
+        ]
+      )
+    )
+  }
+
+  func testInputResponsesRejectMalformedSamplingResult() throws {
+    XCTAssertThrowsError(
+      try MCPUpdateTaskParams(
+        taskID: "task-1",
+        inputResponses: [
+          "sampling": .object([
+            "content": .object(["type": .string("text")]),
+            "model": .string("fixture-model"),
+            "role": .string("assistant"),
+          ])
+        ]
       )
     )
   }
@@ -480,7 +597,7 @@ final class MCPTasksRuntimeTests: XCTestCase {
     let client = try MCPClient(
       transport: transport,
       configuration: configuration,
-      extensionMethods: MCPTasksExtension.extensionMethods()
+      registry: try MCPTasksExtension.methodRegistry()
     )
 
     do {
@@ -509,7 +626,7 @@ final class MCPTasksRuntimeTests: XCTestCase {
     let client = try MCPClient(
       transport: MCPInMemoryClientTransport(server: server),
       configuration: configuration,
-      extensionMethods: MCPTasksExtension.extensionMethods()
+      registry: try MCPTasksExtension.methodRegistry()
     )
 
     do {

@@ -80,6 +80,19 @@ final class MCPWireTests: XCTestCase {
     XCTAssertEqual(try MCPRPCError(json: response.error.json), response.error)
   }
 
+  func testPublicLargeRPCErrorCodeConstructionPreservesExactJSONLexeme() throws {
+    let number = try MCPJSONNumber(rawValue: "9223372036854775808")
+    let code = try MCPRPCErrorCode(rawValue: number)
+    let error = MCPRPCError(code: code, message: "large")
+
+    XCTAssertEqual(error.code.description, "9223372036854775808")
+    XCTAssertEqual(error.json.objectValue?["code"], .number(number))
+    XCTAssertEqual(
+      try MCPJSONValue.object(error.json.objectValue ?? [:]).encoded(),
+      Data(#"{"code":9223372036854775808,"message":"large"}"#.utf8)
+    )
+  }
+
   func testErrorCodePreservesMathematicalIntegerLexeme() throws {
     let input = Data(
       #"{"jsonrpc":"2.0","id":1,"error":{"code":1.0,"message":"x"}}"#.utf8

@@ -55,7 +55,8 @@ let package = Package(
       name: "MCPConformanceClient", dependencies: ["MCP", "MCPHTTPClient", "MCPStdioClient"],
       swiftSettings: strictSwiftSettings),
     .executableTarget(
-      name: "MCPConformanceServer", dependencies: ["MCP", "MCPHTTPServer", "MCPStdioServer"],
+      name: "MCPConformanceServer",
+      dependencies: ["MCP", "MCPTasks", "MCPHTTPServer", "MCPStdioServer"],
       swiftSettings: strictSwiftSettings),
     .testTarget(name: "MCPTests", dependencies: ["MCP"], swiftSettings: strictSwiftSettings),
     .testTarget(

@@ -77,6 +77,43 @@ final class MCPRegistryTests: XCTestCase {
     XCTAssertEqual(try registry.require(descriptor.name), descriptor)
   }
 
+  func testHTTPNameUsesAnArbitraryTopLevelParameterKey() throws {
+    let descriptor = try MCPMethodDescriptor(
+      name: "com.example/jobs/get",
+      direction: .clientToServerRequest,
+      httpNameSource: .parameter("jobId"),
+      isExtension: true
+    )
+    let registry = try MCPMethodRegistry(extensionMethods: [descriptor])
+    let method = try registry.require(descriptor.name)
+
+    XCTAssertEqual(
+      try method.httpName(from: ["jobId": .string("job-42")]),
+      "job-42"
+    )
+    XCTAssertThrowsError(try method.httpName(from: [:])) { error in
+      XCTAssertEqual(
+        error as? MCPJSONError,
+        .invalidField(field: "jobId", reason: "required for Mcp-Name")
+      )
+    }
+  }
+
+  func testHTTPNameRejectsAnEmptyParameterKeyDuringDescriptorConstruction() {
+    XCTAssertThrowsError(
+      try MCPMethodDescriptor(
+        name: "com.example/jobs/get",
+        direction: .clientToServerRequest,
+        httpNameSource: .parameter("")
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? MCPJSONError,
+        .invalidField(field: "httpNameSource", reason: "parameter key must not be empty")
+      )
+    }
+  }
+
   func testRetiredCoreMethodsCannotReturnThroughExtensionRegistry() {
     for method in [
       "notifications/elicitation/complete",

@@ -23,7 +23,7 @@ Implemented:
 - durable-before-return task creation check
 - host-owned durable store interface
 - cooperative cancellation acknowledgement semantics
-- client capability and server discovery extension helpers
+- client capability and canonical method registry helpers
 
 Not implemented in the runtime surface:
 
@@ -77,7 +77,8 @@ let transport = MCPHTTPClientTransport(
 ```
 
 This is required so `tasks/get`, `tasks/update`, and `tasks/cancel` emit `Mcp-Name` with the task ID.
-There is no automatic fallback to a transport lacking that routing contract.
+The Tasks client rejects a registry-reporting transport whose registry differs during construction;
+there is no automatic fallback to a transport lacking that routing contract.
 
 ## Server
 
@@ -100,7 +101,7 @@ try builder.registerCallTool {
   guard let creator else {
     throw MCPRPCError.missingRequiredClientCapabilities(
       "This tool requires durable task execution",
-      requiredCapabilities: try MCPTasksExtension.requiredClientCapabilities()
+      requiredCapabilities: try MCPTasksExtension.clientCapabilities()
     )
   }
   let taskID = try await creator.nextTaskID()
@@ -123,10 +124,10 @@ let server = try builder.build()
 advertising the Tasks extension. This prevents a server from claiming Tasks support while omitting
 `tasks/get`, `tasks/update`, or `tasks/cancel`.
 
-`MCPServerBuilder` is not an official-extension installation path. Passing the public Tasks
-descriptor or capability helpers to that raw builder is rejected; use `MCPTasksServer.makeBuilder`
-and `registerCallTool` so the capability and lifecycle descriptors are installed as one validated
-unit. The public helpers remain available for client and HTTP method registries.
+`MCPServerBuilder` is not an official-extension installation path. Use
+`MCPTasksServer.makeBuilder` and `registerCallTool` so the capability and lifecycle descriptors are
+installed as one validated unit. Clients and HTTP transports share the canonical registry returned
+by `MCPTasksExtension.methodRegistry()`.
 
 The store receives the request's `MCPAuthorizationContext` on every create, read, update, and
 cancel operation. It must enforce task ownership and provide durable storage; the package has no
@@ -158,8 +159,18 @@ Repository qualification used:
 swift build
 swift test
 SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
+SWIFT_BUILD_JOBS=1 ./Scripts/verify-tasks-conformance.sh
 ```
 
 In the current checkout, `swift build`, `swift test`, and the release verification script were
 executed successfully. The schema corpus reports explicit skips for external-reference and
 unsupported-dialect cases, as required by the self-contained validator profile.
+
+The pinned official Tasks diagnostic is intentionally non-zero in this checkout:
+`SWIFT_BUILD_JOBS=1 ./Scripts/verify-tasks-conformance.sh` exits `1`. Seven scenarios fail only
+because the alpha.11 wire-schema check rejects valid SEP-2663 `resultType: "task"` envelopes
+([upstream issue #424](https://github.com/modelcontextprotocol/conformance/issues/424)).
+`tasks-dispatch-and-envelope` also sends an arbitrary object under an unknown `inputResponses` key;
+the strict SDK correctly rejects that schema-invalid `InputResponse` value. The official
+`tasks-status-notifications` scenario is `SKIPPED`, while `tasks-required-task-error` passes 3/3.
+This diagnostic does not establish full official Tasks conformance.

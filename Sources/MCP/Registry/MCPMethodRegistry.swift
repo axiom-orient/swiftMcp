@@ -28,12 +28,9 @@ public enum MCPCacheability: String, Sendable, Hashable {
   case resourceRead
 }
 
-public enum MCPHTTPNameSource: String, Sendable, Hashable {
+public enum MCPHTTPNameSource: Sendable, Hashable {
   case none
-  case toolName
-  case promptName
-  case resourceURI
-  case taskID
+  case parameter(String)
 }
 
 public struct MCPMethodDescriptor: Sendable, Hashable {
@@ -71,6 +68,10 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
       : MCPMethodRegistry.isValidMethodName(name, extensionMethod: false)
     guard validName, !isExtension || !MCPMethodRegistry.isRetiredCoreMethodName(name) else {
       throw MCPRegistryError.invalidMethodName(name)
+    }
+    if case .parameter(let parameter) = httpNameSource, parameter.isEmpty {
+      throw MCPJSONError.invalidField(
+        field: "httpNameSource", reason: "parameter key must not be empty")
     }
     if let extensionIdentifier {
       guard isExtension,
@@ -133,9 +134,11 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
     let key: String
     switch httpNameSource {
     case .none: return nil
-    case .toolName, .promptName: key = "name"
-    case .resourceURI: key = "uri"
-    case .taskID: key = "taskId"
+    case .parameter(let parameter): key = parameter
+    }
+    guard !key.isEmpty else {
+      throw MCPJSONError.invalidField(
+        field: "Mcp-Name", reason: "parameter key must not be empty")
     }
     guard case .string(let value)? = params[key], !value.isEmpty else {
       throw MCPJSONError.invalidField(field: key, reason: "required for Mcp-Name")
@@ -164,6 +167,7 @@ public enum MCPRegistryError: Error, Sendable, Equatable, CustomStringConvertibl
   case invalidStandardAugmentation(String)
   case unsupportedMethod(String)
   case wrongDirection(method: String, expected: MCPMethodDirection, actual: MCPMethodDirection)
+  case registryMismatch
 
   public var description: String {
     switch self {
@@ -178,11 +182,13 @@ public enum MCPRegistryError: Error, Sendable, Equatable, CustomStringConvertibl
     case .unsupportedMethod(let name): "Unsupported MCP method: \(name)"
     case .wrongDirection(let method, let expected, let actual):
       "MCP method \(method) has direction \(actual.rawValue), expected \(expected.rawValue)"
+    case .registryMismatch:
+      "MCP client and transport method registries must match"
     }
   }
 }
 
-public struct MCPMethodRegistry: Sendable {
+public struct MCPMethodRegistry: Sendable, Equatable {
   private let descriptorsByName: [String: MCPMethodDescriptor]
 
   public init(extensionMethods: [MCPMethodDescriptor] = []) throws {
@@ -341,11 +347,11 @@ public struct MCPMethodRegistry: Sendable {
   fileprivate static let listToolsDescriptor = request(
     "tools/list", capability: .tools, cache: .listing)
   fileprivate static let callToolDescriptor = request(
-    "tools/call", capability: .tools, httpName: .toolName, mrtr: true)
+    "tools/call", capability: .tools, httpName: .parameter("name"), mrtr: true)
   fileprivate static let listPromptsDescriptor = request(
     "prompts/list", capability: .prompts, cache: .listing)
   fileprivate static let getPromptDescriptor = request(
-    "prompts/get", capability: .prompts, httpName: .promptName, mrtr: true)
+    "prompts/get", capability: .prompts, httpName: .parameter("name"), mrtr: true)
   fileprivate static let listResourcesDescriptor = request(
     "resources/list", capability: .resources, cache: .listing)
   fileprivate static let listResourceTemplatesDescriptor = request(
@@ -354,7 +360,7 @@ public struct MCPMethodRegistry: Sendable {
     "resources/read",
     capability: .resources,
     cache: .resourceRead,
-    httpName: .resourceURI,
+    httpName: .parameter("uri"),
     mrtr: true
   )
   fileprivate static let completeDescriptor = request(

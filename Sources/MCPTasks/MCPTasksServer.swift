@@ -208,8 +208,8 @@ public struct MCPTasksServerBuilder: Sendable {
       // The Stable Tasks capability is always an empty object. Filter the reserved entry before
       // re-applying it so callers cannot remove it or replace it with mutable configuration.
       var callerExtensions = newValue
-      callerExtensions.removeValue(forKey: MCPTasksExtension.identifier)
-      core.extensions = MCPTasksExtension.serverExtensions(extending: callerExtensions)
+      callerExtensions[MCPTasksExtension.identifier] = .object([:])
+      core.extensions = callerExtensions
     }
   }
 
@@ -404,7 +404,7 @@ public enum MCPTasksServer {
   private static func missingCapabilityError() -> MCPRPCError {
     .missingRequiredClientCapabilities(
       "Client did not declare the Tasks extension required by this request",
-      requiredCapabilities: try? MCPTasksExtension.requiredClientCapabilities()
+      requiredCapabilities: try? MCPTasksExtension.clientCapabilities()
     )
   }
 

@@ -581,12 +581,13 @@ final class MCPHTTPSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked
 // Immutable request factory. Shared mutable tool metadata is delegated to the
 // lock-protected `MCPHTTPToolCatalog`.
 public final class MCPHTTPClientTransport: MCPClientToolCatalogInvalidatingTransport,
+  MCPClientRegistryReportingTransport,
   @unchecked Sendable
 {
   public let endpointIdentity: String
   public let configuration: MCPHTTPClientConfiguration
   public let toolCatalog: MCPHTTPToolCatalog
-  private let registry: MCPMethodRegistry
+  public let registry: MCPMethodRegistry
   private let sessionDelegate: MCPHTTPSessionDelegate
   private let session: URLSession
 

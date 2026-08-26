@@ -202,6 +202,45 @@ private func sendRawHTTP11Request(_ request: Data, to endpoint: URL) throws -> D
 final class MCPHTTPTests: XCTestCase {
   private let directHandlerEndpoint = URL(string: "http://127.0.0.1/mcp")!
 
+  func testClientUsesOneRegistryAndRejectsHTTPRegistryMismatchAtConstruction() throws {
+    let extensionMethod = try MCPMethodDescriptor(
+      name: "com.example/jobs/get",
+      direction: .clientToServerRequest,
+      isExtension: true
+    )
+    let customRegistry = try MCPMethodRegistry(extensionMethods: [extensionMethod])
+    let configuration = try MCPClientConfiguration(
+      implementation: implementation("registry-client"),
+      capabilities: MCPClientCapabilities()
+    )
+    let standardTransport = MCPHTTPClientTransport(
+      configuration: try MCPHTTPClientConfiguration(endpoint: directHandlerEndpoint),
+      registry: .standard
+    )
+
+    XCTAssertThrowsError(
+      try MCPClient(
+        transport: standardTransport,
+        configuration: configuration,
+        registry: customRegistry
+      )
+    ) { error in
+      XCTAssertEqual(error as? MCPRegistryError, .registryMismatch)
+    }
+
+    let matchingTransport = MCPHTTPClientTransport(
+      configuration: try MCPHTTPClientConfiguration(endpoint: directHandlerEndpoint),
+      registry: customRegistry
+    )
+    let client = try MCPClient(
+      transport: matchingTransport,
+      configuration: configuration,
+      registry: customRegistry
+    )
+    XCTAssertEqual(matchingTransport.registry, customRegistry)
+    XCTAssertEqual(client.registry, customRegistry)
+  }
+
   private func handle(
     _ handler: MCPHTTPServerHandler,
     _ request: MCPHTTPRequest,
@@ -583,6 +622,45 @@ final class MCPHTTPTests: XCTestCase {
       ) { error in
         XCTAssertEqual(error as? MCPHTTPError, .headerMismatch("missing Mcp-Name"))
       }
+    }
+  }
+
+  func testStandardHeadersRoundTripAnArbitraryVendorParameterAndRejectMismatches() throws {
+    let descriptor = try MCPMethodDescriptor(
+      name: "com.example/jobs/get",
+      direction: .clientToServerRequest,
+      httpNameSource: .parameter("jobId"),
+      isExtension: true
+    )
+    let request = try MCPWireRequest(
+      id: MCPRequestID(42),
+      method: descriptor.name,
+      params: ["jobId": .string("job/42")]
+    )
+
+    var headers = try MCPHTTPStandardHeaders.make(for: request, descriptor: descriptor)
+    XCTAssertEqual(
+      try MCPHTTPHeaderValueCodec.decode(try XCTUnwrap(headers[MCPHTTPHeaderName.name])),
+      "job/42"
+    )
+    XCTAssertNoThrow(
+      try MCPHTTPStandardHeaders.validate(headers, request: request, descriptor: descriptor)
+    )
+
+    headers[MCPHTTPHeaderName.name] = nil
+    XCTAssertThrowsError(
+      try MCPHTTPStandardHeaders.validate(headers, request: request, descriptor: descriptor)
+    ) { error in
+      XCTAssertEqual(error as? MCPHTTPError, .headerMismatch("missing Mcp-Name"))
+    }
+
+    headers = try MCPHTTPStandardHeaders.make(for: request, descriptor: descriptor)
+    headers[MCPHTTPHeaderName.name] = MCPHTTPHeaderValueCodec.encode("job/43")
+    XCTAssertThrowsError(
+      try MCPHTTPStandardHeaders.validate(headers, request: request, descriptor: descriptor)
+    ) { error in
+      XCTAssertEqual(
+        error as? MCPHTTPError, .headerMismatch("Mcp-Name does not match the request body"))
     }
   }
 

@@ -29,14 +29,6 @@ The built-in validator handles self-contained JSON Schema 2020-12 and draft-07 p
 local dynamic references. Unsupported dialects and unresolved external references fail closed; a
 host can explicitly supply another validator.
 
-### Breaking wire-code API
-
-`MCPRPCError.code` is an `MCPRPCErrorCode`, not an `Int64`. This preserves every wire-valid
-mathematical integer, including values outside `Int64`, and retains its exact JSON number lexeme.
-Use `error.code.rawValue` for the exact wire number or `error.code.int64Value` when an `Int64?` is
-appropriate. Integer literals and the existing `MCPRPCError(code: Int64, ...)` initializer remain
-available for ordinary error construction.
-
 ## Install
 
 Add SwiftMCP from GitHub. The current repository tag is `0.1.3`.

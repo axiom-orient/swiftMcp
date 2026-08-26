@@ -28,14 +28,6 @@ English: [README.md](README.md)
 프로필을 처리합니다. 지원하지 않는 dialect와 해석할 수 없는 외부 reference는 fail-closed로
 거부합니다. 다른 validator가 필요하면 호스트가 명시적으로 주입해야 합니다.
 
-### Breaking wire-code API
-
-`MCPRPCError.code` 타입은 이제 `Int64`가 아니라 `MCPRPCErrorCode`입니다. 따라서 `Int64` 범위를
-넘는 wire-valid mathematical integer도 거부하지 않고, JSON number의 원래 lexeme도 보존합니다.
-정확한 wire 값은 `error.code.rawValue`, `Int64`가 필요한 경우에는 `error.code.int64Value`를
-사용하세요. 일반적인 오류 생성에서는 integer literal과 기존
-`MCPRPCError(code: Int64, ...)` initializer를 계속 사용할 수 있습니다.
-
 ## 설치
 
 GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.1.3`입니다.

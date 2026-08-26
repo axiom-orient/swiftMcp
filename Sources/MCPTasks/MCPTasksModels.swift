@@ -22,54 +22,40 @@ public enum MCPTasksExtension {
     )
   }
 
-  public static func serverExtensions(
-    extending base: [String: MCPJSONValue] = [:]
-  ) -> [String: MCPJSONValue] {
-    var result = base
-    result[identifier] = .object([:])
-    return result
-  }
-
   public static func supportsTasks(_ capabilities: MCPClientCapabilities) -> Bool {
     guard case .object(let value)? = capabilities.extensions[identifier] else { return false }
     return value.isEmpty
   }
 
-  public static func requiredClientCapabilities() throws -> MCPClientCapabilities {
-    try clientCapabilities()
+  public static func methodRegistry() throws -> MCPMethodRegistry {
+    try MCPMethodRegistry(extensionMethods: extensionDescriptors())
   }
 
-  public static func extensionMethods() throws -> [MCPMethodDescriptor] {
+  private static func extensionDescriptors() throws -> [MCPMethodDescriptor] {
     [
-      try callToolAugmentationDescriptor(),
+      try callToolExtensionDescriptor(),
       try getTaskDescriptor(),
       try updateTaskDescriptor(),
       try cancelTaskDescriptor(),
     ]
   }
 
-  public static func methodRegistry() throws -> MCPMethodRegistry {
-    try MCPMethodRegistry(extensionMethods: extensionMethods())
-  }
-
-  /// Produces the package-scoped proof used by the Tasks server wrapper. The public descriptor
-  /// and capability helpers remain available for clients and HTTP registries, but cannot be
-  /// passed to the raw server builder as an official server installation.
+  /// Produces the package-scoped proof used by the Tasks server wrapper.
   package static func officialRegistration() throws -> MCPOfficialExtensionRegistration {
     try MCPOfficialExtensionRegistration(
       identifier: identifier,
-      methods: extensionMethods(),
+      methods: extensionDescriptors(),
       capability: .object([:])
     )
   }
 
-  static func callToolAugmentationDescriptor() throws -> MCPMethodDescriptor {
+  private static func callToolExtensionDescriptor() throws -> MCPMethodDescriptor {
     try MCPMethodDescriptor(
       name: "tools/call",
       direction: .clientToServerRequest,
       requiredServerCapability: .tools,
       cacheability: .none,
-      httpNameSource: .toolName,
+      httpNameSource: .parameter("name"),
       allowsMRTR: true,
       extensionResultTypes: [taskResultType],
       isExtension: true,
@@ -77,43 +63,31 @@ public enum MCPTasksExtension {
     )
   }
 
-  static func callToolDescriptor() throws -> MCPMethodDescriptor {
-    try MCPMethodDescriptor(
-      name: "tools/call",
-      direction: .clientToServerRequest,
-      requiredServerCapability: .tools,
-      cacheability: .none,
-      httpNameSource: .toolName,
-      allowsMRTR: true,
-      extensionResultTypes: [taskResultType]
-    )
-  }
-
-  static func getTaskDescriptor() throws -> MCPMethodDescriptor {
+  private static func getTaskDescriptor() throws -> MCPMethodDescriptor {
     try MCPMethodDescriptor(
       name: "tasks/get",
       direction: .clientToServerRequest,
-      httpNameSource: .taskID,
+      httpNameSource: .parameter("taskId"),
       isExtension: true,
       extensionIdentifier: identifier
     )
   }
 
-  static func updateTaskDescriptor() throws -> MCPMethodDescriptor {
+  private static func updateTaskDescriptor() throws -> MCPMethodDescriptor {
     try MCPMethodDescriptor(
       name: "tasks/update",
       direction: .clientToServerRequest,
-      httpNameSource: .taskID,
+      httpNameSource: .parameter("taskId"),
       isExtension: true,
       extensionIdentifier: identifier
     )
   }
 
-  static func cancelTaskDescriptor() throws -> MCPMethodDescriptor {
+  private static func cancelTaskDescriptor() throws -> MCPMethodDescriptor {
     try MCPMethodDescriptor(
       name: "tasks/cancel",
       direction: .clientToServerRequest,
-      httpNameSource: .taskID,
+      httpNameSource: .parameter("taskId"),
       isExtension: true,
       extensionIdentifier: identifier
     )
@@ -122,19 +96,19 @@ public enum MCPTasksExtension {
 
 public enum MCPTasksMethods {
   public static var callTool: MCPMethod<MCPCallToolParams, MCPTasksCallToolResult> {
-    get throws { MCPMethod(try MCPTasksExtension.callToolDescriptor()) }
+    get throws { MCPMethod(try MCPTasksExtension.methodRegistry().require("tools/call")) }
   }
 
   public static var get: MCPMethod<MCPGetTaskParams, MCPGetTaskResult> {
-    get throws { MCPMethod(try MCPTasksExtension.getTaskDescriptor()) }
+    get throws { MCPMethod(try MCPTasksExtension.methodRegistry().require("tasks/get")) }
   }
 
   public static var update: MCPMethod<MCPUpdateTaskParams, MCPTaskAcknowledgement> {
-    get throws { MCPMethod(try MCPTasksExtension.updateTaskDescriptor()) }
+    get throws { MCPMethod(try MCPTasksExtension.methodRegistry().require("tasks/update")) }
   }
 
   public static var cancel: MCPMethod<MCPCancelTaskParams, MCPTaskAcknowledgement> {
-    get throws { MCPMethod(try MCPTasksExtension.cancelTaskDescriptor()) }
+    get throws { MCPMethod(try MCPTasksExtension.methodRegistry().require("tasks/cancel")) }
   }
 }
 
@@ -667,6 +641,213 @@ private enum MCPTasksValidation {
     }
   }
 
+  private static func validateInputResponse(
+    _ response: [String: MCPJSONValue],
+    key: String
+  ) throws {
+    // InputResponse is an open union: unknown members are ignored by the task store, but every
+    // value must still be one of the three stable response shapes. Try each branch so an
+    // extension field that happens to overlap another branch does not change validity.
+    do {
+      try validateElicitationResult(response, key: key)
+      return
+    } catch {
+      // Try the remaining stable union members.
+    }
+    do {
+      try validateRootsResult(response, key: key)
+      return
+    } catch {
+      // Try the remaining stable union member.
+    }
+    do {
+      try validateCreateMessageResult(response, key: key)
+      return
+    } catch {
+      throw MCPJSONError.invalidField(
+        field: "inputResponses.\(key)",
+        reason: "must be a valid ElicitResult, ListRootsResult, or CreateMessageResult")
+    }
+  }
+
+  private static func validateElicitationResult(
+    _ response: [String: MCPJSONValue],
+    key: String
+  ) throws {
+    let result = try MCPElicitationResult(json: .object(response))
+    try validatePrimitiveElicitationContent(result.content, key: key)
+  }
+
+  private static func validatePrimitiveElicitationContent(
+    _ content: [String: MCPJSONValue]?,
+    key: String
+  ) throws {
+    guard let content else { return }
+    for (name, value) in content {
+      let field = "inputResponses.\(key).content.\(name)"
+      switch value {
+      case .string, .bool:
+        continue
+      case .number(let number):
+        guard number.isMathematicalInteger else {
+          throw MCPJSONError.invalidField(
+            field: field, reason: "expected string, integer, boolean, or string array")
+        }
+      case .array(let values):
+        guard values.allSatisfy({ if case .string = $0 { true } else { false } }) else {
+          throw MCPJSONError.invalidField(
+            field: field, reason: "expected string, integer, boolean, or string array")
+        }
+      default:
+        throw MCPJSONError.invalidField(
+          field: field, reason: "expected string, integer, boolean, or string array")
+      }
+    }
+  }
+
+  private static func validateRootsResult(
+    _ response: [String: MCPJSONValue],
+    key: String
+  ) throws {
+    let object = try MCPJSONObject(.object(response))
+    let roots = try object.requiredArray("roots")
+    for (index, root) in roots.enumerated() {
+      let rootObject = try MCPJSONObject(root)
+      let uri = try rootObject.requiredNonEmptyString("uri")
+      try validateURI(uri, field: "inputResponses.\(key).roots[\(index)].uri")
+      if let name = rootObject.values["name"] {
+        guard case .string = name else {
+          throw MCPJSONError.expectedString(
+            field: "inputResponses.\(key).roots[\(index)].name")
+        }
+      }
+      if let metadata = rootObject.values["_meta"] {
+        guard case .object = metadata else {
+          throw MCPJSONError.invalidField(
+            field: "inputResponses.\(key).roots[\(index)]._meta", reason: "expected object")
+        }
+      }
+    }
+  }
+
+  private static func validateCreateMessageResult(
+    _ response: [String: MCPJSONValue],
+    key: String
+  ) throws {
+    let object = try MCPJSONObject(.object(response))
+    _ = try object.requiredString("model")
+    _ = try MCPRole(
+      json: object.values["role"]
+        ?? {
+          throw MCPJSONError.missingField(
+            "inputResponses.\(key).role")
+        }())
+    let content =
+      try object.values["content"]
+      ?? {
+        throw MCPJSONError.missingField(
+          "inputResponses.\(key).content")
+      }()
+    try validateSamplingContent(content, field: "inputResponses.\(key).content")
+    _ = try object.optionalString("stopReason")
+    if let metadata = object.values["_meta"] {
+      guard case .object = metadata else {
+        throw MCPJSONError.invalidField(
+          field: "inputResponses.\(key)._meta", reason: "expected object")
+      }
+    }
+  }
+
+  private static func validateSamplingContent(
+    _ value: MCPJSONValue,
+    field: String
+  ) throws {
+    switch value {
+    case .object:
+      try validateSamplingContentBlock(value, field: field)
+    case .array(let values):
+      for (index, value) in values.enumerated() {
+        try validateSamplingContentBlock(value, field: "\(field)[\(index)]")
+      }
+    default:
+      throw MCPJSONError.invalidField(field: field, reason: "expected content object or array")
+    }
+  }
+
+  private static func validateSamplingContentBlock(
+    _ value: MCPJSONValue,
+    field: String
+  ) throws {
+    let object = try MCPJSONObject(value)
+    let type = try object.requiredString("type")
+    switch type {
+    case "text":
+      _ = try MCPTextContent(json: value)
+    case "image":
+      let image = try MCPBinaryContent(json: value)
+      guard image.kind == .image else {
+        throw MCPJSONError.invalidField(field: "\(field).type", reason: "expected image")
+      }
+    case "audio":
+      let audio = try MCPBinaryContent(json: value)
+      guard audio.kind == .audio else {
+        throw MCPJSONError.invalidField(field: "\(field).type", reason: "expected audio")
+      }
+    case "tool_use":
+      try validateToolUseContent(object, field: field)
+    case "tool_result":
+      try validateToolResultContent(object, field: field)
+    default:
+      throw MCPJSONError.invalidField(
+        field: "\(field).type",
+        reason: "expected text, image, audio, tool_use, or tool_result")
+    }
+  }
+
+  private static func validateToolUseContent(
+    _ object: MCPJSONObject,
+    field: String
+  ) throws {
+    _ = try object.requiredString("id")
+    _ = try object.requiredString("name")
+    _ = try object.requiredObject("input")
+    if let metadata = object.values["_meta"] {
+      guard case .object = metadata else {
+        throw MCPJSONError.invalidField(field: "\(field)._meta", reason: "expected object")
+      }
+    }
+  }
+
+  private static func validateToolResultContent(
+    _ object: MCPJSONObject,
+    field: String
+  ) throws {
+    _ = try object.requiredString("toolUseId")
+    let content = try object.requiredArray("content")
+    for block in content {
+      _ = try MCPContentBlock(json: block)
+    }
+    if let isError = object.values["isError"] {
+      guard case .bool = isError else {
+        throw MCPJSONError.expectedBool(field: "\(field).isError")
+      }
+    }
+    if let metadata = object.values["_meta"] {
+      guard case .object = metadata else {
+        throw MCPJSONError.invalidField(field: "\(field)._meta", reason: "expected object")
+      }
+    }
+  }
+
+  private static func validateURI(_ value: String, field: String) throws {
+    let hasControlCharacter = value.unicodeScalars.contains { scalar in
+      scalar.value <= 0x20 || scalar.value == 0x7F
+    }
+    guard !hasControlCharacter, let url = URL(string: value), url.scheme != nil else {
+      throw MCPJSONError.invalidField(field: field, reason: "must be a valid URI")
+    }
+  }
+
   private static func validateSamplingRequest(
     _ request: MCPJSONObject,
     key: String
@@ -700,83 +881,6 @@ private enum MCPTasksValidation {
         throw MCPJSONError.invalidField(
           field: "inputRequests.\(key).params.messages[\(index)].content",
           reason: "expected content object or array")
-      }
-    }
-  }
-
-  private static func validateInputResponse(
-    _ response: [String: MCPJSONValue],
-    key: String
-  ) throws {
-    if response["action"] != nil {
-      let elicitation = try MCPElicitationResult(json: .object(response))
-      try validatePrimitiveElicitationContent(elicitation.content, key: key)
-      return
-    }
-    if let rawRoots = response["roots"] {
-      guard case .array(let roots) = rawRoots else {
-        throw MCPJSONError.invalidField(
-          field: "inputResponses.\(key).roots", reason: "expected array")
-      }
-      for (index, root) in roots.enumerated() {
-        let rootObject = try MCPJSONObject(root)
-        _ = try rootObject.requiredNonEmptyString("uri")
-        if let name = rootObject.values["name"] {
-          guard case .string = name else {
-            throw MCPJSONError.expectedString(
-              field: "inputResponses.\(key).roots[\(index)].name")
-          }
-        }
-        if let metadata = rootObject.values["_meta"] {
-          guard case .object = metadata else {
-            throw MCPJSONError.invalidField(
-              field: "inputResponses.\(key).roots[\(index)]._meta", reason: "expected object")
-          }
-        }
-      }
-      return
-    }
-    // Sampling has no core typed model in this package. Validate its stable discriminator and
-    // required fields while preserving the complete response payload for the host.
-    guard case .string? = response["model"] else {
-      throw MCPJSONError.missingField("inputResponses.\(key).model")
-    }
-    let role = try MCPJSONObject(.object(response)).requiredString("role")
-    guard role == "assistant" || role == "user" else {
-      throw MCPJSONError.invalidField(
-        field: "inputResponses.\(key).role", reason: "expected assistant or user")
-    }
-    guard let content = response["content"] else {
-      throw MCPJSONError.missingField("inputResponses.\(key).content")
-    }
-    switch content {
-    case .object, .array:
-      break
-    default:
-      throw MCPJSONError.invalidField(
-        field: "inputResponses.\(key).content", reason: "expected content object or array")
-    }
-  }
-
-  private static func validatePrimitiveElicitationContent(
-    _ content: [String: MCPJSONValue]?,
-    key: String
-  ) throws {
-    guard let content else { return }
-    for (name, value) in content {
-      switch value {
-      case .string, .number, .bool:
-        continue
-      case .array(let values):
-        guard values.allSatisfy({ if case .string = $0 { true } else { false } }) else {
-          throw MCPJSONError.invalidField(
-            field: "inputResponses.\(key).content.\(name)",
-            reason: "expected string array")
-        }
-      default:
-        throw MCPJSONError.invalidField(
-          field: "inputResponses.\(key).content.\(name)",
-          reason: "expected string, number, boolean, or string array")
       }
     }
   }

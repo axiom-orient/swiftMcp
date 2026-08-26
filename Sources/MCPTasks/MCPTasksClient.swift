@@ -14,7 +14,8 @@ public enum MCPTasksClientError: Error, Sendable, Equatable, CustomStringConvert
 /// Typed Tasks extension client over the core request-scoped MCP transport.
 ///
 /// HTTP callers must construct `MCPHTTPClientTransport` with
-/// `MCPTasksExtension.methodRegistry()` so task IDs are emitted as `Mcp-Name`.
+/// `MCPTasksExtension.methodRegistry()` so task IDs are emitted as `Mcp-Name`. Construction fails
+/// when a registry-reporting transport is configured with a different method registry.
 public struct MCPTasksClient: Sendable {
   private let client: MCPClient
 
@@ -27,10 +28,11 @@ public struct MCPTasksClient: Sendable {
     guard MCPTasksExtension.supportsTasks(configuration.capabilities) else {
       throw MCPTasksClientError.capabilityNotDeclared
     }
+    let registry = try MCPTasksExtension.methodRegistry()
     client = try MCPClient(
       transport: transport,
       configuration: configuration,
-      extensionMethods: MCPTasksExtension.extensionMethods(),
+      registry: registry,
       startingRequestID: startingRequestID,
       diagnostics: diagnostics
     )

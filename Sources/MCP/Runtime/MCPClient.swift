@@ -113,6 +113,15 @@ public protocol MCPClientTransport: Sendable {
   func open(_ request: MCPWireRequest) async throws -> MCPClientExchange
 }
 
+/// Optional transport contract for transports that bind a client to a known method registry.
+///
+/// A client verifies this registry during construction, before opening any request-scoped
+/// exchange. Transports that cannot know the peer registry may conform only to
+/// `MCPClientTransport`.
+public protocol MCPClientRegistryReportingTransport: MCPClientTransport {
+  var registry: MCPMethodRegistry { get }
+}
+
 /// Optional transport hook for request-derived tool metadata such as HTTP `x-mcp-header`
 /// bindings. A tools/list_changed notification invalidates this metadata together with the core
 /// client's validation catalog.
@@ -421,13 +430,18 @@ public struct MCPClient: Sendable {
   public init(
     transport: any MCPClientTransport,
     configuration: MCPClientConfiguration,
-    extensionMethods: [MCPMethodDescriptor] = [],
+    registry: MCPMethodRegistry = .standard,
     startingRequestID: Int64 = 1,
     diagnostics: any MCPDiagnosticSink = MCPNoopDiagnosticSink()
   ) throws {
+    if let registryReportingTransport = transport as? any MCPClientRegistryReportingTransport,
+      registryReportingTransport.registry != registry
+    {
+      throw MCPRegistryError.registryMismatch
+    }
     self.transport = transport
     self.configuration = configuration
-    self.registry = try MCPMethodRegistry(extensionMethods: extensionMethods)
+    self.registry = registry
     self.requestIDs = MCPRequestIDAllocator(startingAt: startingRequestID)
     self.toolCatalog = MCPClientToolCatalog()
     self.cacheEpochs = MCPClientCacheEpochs()
@@ -1702,10 +1716,12 @@ public struct MCPClient: Sendable {
 
 /// Real in-process request binding used for embedding and deterministic integration tests.
 /// It preserves request-scoped semantics and does not simulate network transport behavior.
-public struct MCPInMemoryClientTransport: MCPClientTransport {
+public struct MCPInMemoryClientTransport: MCPClientRegistryReportingTransport {
   public let endpointIdentity: String
   private let server: MCPServer
   private let authorization: MCPAuthorizationContext
+
+  public var registry: MCPMethodRegistry { server.registry }
 
   public init(
     server: MCPServer,

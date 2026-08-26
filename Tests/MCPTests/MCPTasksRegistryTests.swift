@@ -9,7 +9,7 @@ final class MCPTasksRegistryTests: XCTestCase {
       name: "tools/call",
       direction: .clientToServerRequest,
       requiredServerCapability: .tools,
-      httpNameSource: .toolName,
+      httpNameSource: .parameter("name"),
       allowsMRTR: true,
       extensionResultTypes: ["task"],
       isExtension: true,
@@ -18,7 +18,7 @@ final class MCPTasksRegistryTests: XCTestCase {
     let get = try MCPMethodDescriptor(
       name: "tasks/get",
       direction: .clientToServerRequest,
-      httpNameSource: .taskID,
+      httpNameSource: .parameter("taskId"),
       isExtension: true,
       extensionIdentifier: id
     )

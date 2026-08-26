@@ -109,14 +109,8 @@ public struct MCPRPCError: Error, Sendable, Hashable, CustomStringConvertible {
   public let message: String
   public let data: MCPJSONValue?
 
-  public init(code: Int64, message: String, data: MCPJSONValue? = nil) {
-    self.code = MCPRPCErrorCode(code)
-    self.message = message
-    self.data = data
-  }
-
-  public init(code: MCPJSONNumber, message: String, data: MCPJSONValue? = nil) throws {
-    self.code = try MCPRPCErrorCode(rawValue: code)
+  public init(code: MCPRPCErrorCode, message: String, data: MCPJSONValue? = nil) {
+    self.code = code
     self.message = message
     self.data = data
   }
@@ -385,8 +379,10 @@ extension MCPRPCError: MCPJSONModel {
     guard let codeNumber = object.values["code"]?.numberValue,
       codeNumber.isMathematicalInteger
     else { throw MCPWireError.invalidErrorCode }
-    try self.init(
-      code: codeNumber, message: try object.requiredString("message"), data: object.values["data"])
+    self.init(
+      code: try MCPRPCErrorCode(rawValue: codeNumber),
+      message: try object.requiredString("message"),
+      data: object.values["data"])
   }
 
   public var json: MCPJSONValue {
