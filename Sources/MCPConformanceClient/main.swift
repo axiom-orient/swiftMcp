@@ -59,22 +59,29 @@ enum MCPConformanceClient {
       throw MCPClientError.protocolViolation("strict protocol version was not advertised")
     }
 
-    // 2. Listing exposes the shared echo tool.
+    // 2. Listing exposes either the shared echo fixture or a safe zero-input tool.
     let tools = try await client.listTools()
-    guard tools.tools.contains(where: { $0.name == "echo" }) else {
-      throw MCPClientError.protocolViolation("echo tool was not listed")
-    }
-
-    // 3. A complete tool call round-trips the supplied text.
-    let result = try await client.callTool(
-      MCPCallToolParams(name: "echo", arguments: ["text": .string("conformance")]))
-    guard result.isError == false, result.resultType == .complete,
-      result.content.contains(where: {
-        if case .text(let text) = $0 { return text.text == "conformance" }
-        return false
-      })
-    else {
-      throw MCPClientError.protocolViolation("echo result did not match")
+    let result: MCPCallToolResult
+    if tools.tools.contains(where: { $0.name == "echo" }) {
+      result = try await client.callTool(
+        MCPCallToolParams(name: "echo", arguments: ["text": .string("conformance")]))
+      guard result.isError == false, result.resultType == .complete,
+        result.content.contains(where: {
+          if case .text(let text) = $0 { return text.text == "conformance" }
+          return false
+        })
+      else {
+        throw MCPClientError.protocolViolation("echo result did not match")
+      }
+    } else {
+      guard let probe = tools.tools.first(where: isSafeZeroInputTool) else {
+        throw MCPClientError.protocolViolation(
+          "no echo or explicitly read-only zero-input tool was listed")
+      }
+      result = try await client.callTool(MCPCallToolParams(name: probe.name))
+      guard result.isError == false, result.resultType == .complete else {
+        throw MCPClientError.protocolViolation("safe tool probe failed")
+      }
     }
 
     // 4. An unknown tool fails without hanging. Peers legitimately differ between an RPC
@@ -88,5 +95,17 @@ enum MCPConformanceClient {
     } catch let error as MCPClientError {
       guard case .rpc = error else { throw error }
     }
+  }
+
+  private static func isSafeZeroInputTool(_ tool: MCPTool) -> Bool {
+    let requiredIsEmpty: Bool
+    switch tool.inputSchema["required"] {
+    case nil: requiredIsEmpty = true
+    case .array(let fields): requiredIsEmpty = fields.isEmpty
+    default: requiredIsEmpty = false
+    }
+    return requiredIsEmpty
+      && tool.annotations?["readOnlyHint"] == .bool(true)
+      && tool.annotations?["destructiveHint"] != .bool(true)
   }
 }
