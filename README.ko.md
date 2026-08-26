@@ -30,11 +30,11 @@ English: [README.md](README.md)
 
 ## 설치
 
-GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.1.3`입니다.
+GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.2.0`입니다.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.3")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.2.0")
 ]
 ```
 
@@ -194,7 +194,7 @@ SDK 환경은 격리된 venv에 구성되며 `MCP_PYTHON_SDK_VENV`에 미리 만
 위 확인이 끝난 뒤 tag를 만드는 예시는 다음과 같습니다.
 
 ```bash
-RELEASE_TAG=0.1.4
+RELEASE_TAG=0.2.0
 git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 ```

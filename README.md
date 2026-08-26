@@ -31,11 +31,11 @@ host can explicitly supply another validator.
 
 ## Install
 
-Add SwiftMCP from GitHub. The current repository tag is `0.1.3`.
+Add SwiftMCP from GitHub. The current repository tag is `0.2.0`.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.1.3")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.2.0")
 ]
 ```
 
@@ -195,7 +195,7 @@ metadata.
 Example tag commands, after the checks above:
 
 ```bash
-RELEASE_TAG=0.1.4
+RELEASE_TAG=0.2.0
 git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 ```
