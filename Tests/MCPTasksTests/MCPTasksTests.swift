@@ -586,6 +586,34 @@ final class MCPTasksRuntimeTests: XCTestCase {
     XCTAssertEqual(readCount, 3)
   }
 
+  func testTaskCreationFailsAmbiguouslyWhenDurabilityCannotBeConfirmed() async throws {
+    let store = DelayedVisibilityTaskStore(hiddenReads: .max)
+    let server = try makeServer(
+      store: store,
+      durability: try MCPTaskDurabilityPolicy(maximumReadAttempts: 3, retryDelay: .zero)
+    )
+    let configuration = try MCPClientConfiguration(
+      implementation: MCPImplementation(name: "tasks-durability-client", version: "1.0.0"),
+      capabilities: try MCPTasksExtension.clientCapabilities()
+    )
+    let client = try MCPTasksClient(
+      transport: InProcessTransport(server: server),
+      configuration: configuration
+    )
+
+    do {
+      _ = try await client.callTool(try MCPCallToolParams(name: "long-work"))
+      XCTFail("a task handle must not escape before durability is confirmed")
+    } catch MCPClientError.rpc(let error) {
+      XCTAssertEqual(error.code.int64Value, -32603)
+      XCTAssertEqual(error.message, "Task durability could not be confirmed")
+      XCTAssertEqual(error.data?.objectValue?["taskId"], .string("fixed-task-id"))
+      XCTAssertEqual(error.data?.objectValue?["ambiguous"], .bool(true))
+    }
+    let readCount = await store.readCount
+    XCTAssertEqual(readCount, 3)
+  }
+
   func testLifecycleRejectsClientWithoutTasksCapability() async throws {
     let store = TestTaskStore()
     let server = try makeServer(store: store)
@@ -742,8 +770,9 @@ final class MCPTasksRuntimeTests: XCTestCase {
   }
 
   private func makeServer(
-    store: TestTaskStore,
-    allowTaskWithoutCapability: Bool = false
+    store: any MCPTaskStore,
+    allowTaskWithoutCapability: Bool = false,
+    durability: MCPTaskDurabilityPolicy = .default
   ) throws -> MCPServer {
     let tool = try MCPTool(
       name: "long-work",
@@ -756,7 +785,8 @@ final class MCPTasksRuntimeTests: XCTestCase {
     var builder = try MCPTasksServer.makeBuilder(
       implementation: MCPImplementation(name: "tasks-test-server", version: "1.0.0"),
       taskStore: store,
-      idGenerator: FixedTaskIDGenerator()
+      idGenerator: FixedTaskIDGenerator(),
+      durability: durability
     )
     builder.setToolResolver { name, _ in name == tool.name ? tool : nil }
     try builder.register(MCPStandardMethods.listTools) { _, _ in
