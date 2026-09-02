@@ -7,8 +7,8 @@ commit과 [그 commit의 schema](https://github.com/modelcontextprotocol/modelco
 
 이 SDK는 타입이 있는 Swift client와 server를 위한 엄격한 stateless MCP 프로필을 구현합니다. 외부
 SwiftPM 의존성은 없습니다.
-Canonical 제품 정체성은 2026 stateless `MCP` runtime + transport + sealed `MCPXcode`
-interoperability edge입니다.
+Canonical 제품 정체성은 strict 2026 stateless `MCP` runtime + 독립적인 공식 `MCPTasks`
+extension implementation + sealed `MCPXcode` interoperability edge입니다.
 
 English: [README.md](README.md)
 
@@ -21,6 +21,10 @@ English: [README.md](README.md)
   request-scoped logging, cache 계약, 범위가 제한된 로컬 JSON Schema 검증입니다.
   MRTR의 `requestState`는 opaque 값으로 보존하며 wire shape 검증과 application content policy를
   분리합니다. 자세한 내용은 [Documentation/MRTR.md](Documentation/MRTR.md)를 참고하세요.
+- `MCPTasks`는 같은 2026-07-28 profile의 stable `io.modelcontextprotocol/tasks` extension을
+  독립적으로 구현합니다. task lifecycle semantics를 소유하되 `MCP` core에 task state나 legacy
+  task RPC를 넣지 않습니다. 자세한 내용은
+  [Documentation/MCPTasks.md](Documentation/MCPTasks.md)를 참고하세요.
 - modern core에는 `initialize`, session header, legacy transport, migration, downgrade 동작,
   JSON-RPC batch, server-originated request, 자동 OAuth 재시도가 없습니다.
 - `MCPXcode`만 유일한 격리된 호환 경계입니다. macOS에서 Apple `xcrun mcpbridge`가 실제로
@@ -33,11 +37,12 @@ English: [README.md](README.md)
 
 ## 설치
 
-GitHub에서 SwiftMCP를 추가합니다. 현재 저장소 기준 태그는 `0.2.0`입니다.
+GitHub에서는 현재 릴리스 태그 `0.4.0`을 사용합니다. 이 릴리스에는 독립적인 `MCPTasks`
+product와 기존 stateless core, transport, Xcode edge가 함께 포함됩니다.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.2.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.3.0")
 ]
 ```
 
@@ -64,6 +69,7 @@ product를 지정할 때는 `swiftmcp` 패키지 식별자를 사용합니다.
 | 제품 | 용도 |
 | --- | --- |
 | `MCP` | protocol model, JSON-RPC wire codec, stateless runtime, schema validation, MRTR, subscriptions, cache 계약 |
+| `MCPTasks` | stable `io.modelcontextprotocol/tasks` extension, task-aware tool result와 `tasks/get`, `tasks/update`, `tasks/cancel` |
 | `MCPHTTPClient` / `MCPHTTPServer` | 요청별 HTTP POST와 JSON 또는 SSE 응답 |
 | `MCPStdioClient` / `MCPStdioServer` | 자식 프로세스 stdio 전송과 server runner |
 | `MCPXcode` | Apple `xcrun mcpbridge` 전용 macOS adapter. legacy lifecycle은 2026 core 밖에 격리 |
@@ -193,7 +199,7 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
 `verify.sh`는 엄격한 형식 검사, warnings-as-errors Debug·Release build, 전체 로컬 test
-(JSON Schema 테스트 포함), 로컬 stdio conformance smoke를 실행합니다. 별도의 SwiftPM scratch
+(MCPTasks 및 JSON Schema 테스트 포함), 로컬 stdio conformance smoke를 실행합니다. 별도의 SwiftPM scratch
 디렉터리를 사용하며 저장소의 `.build`를 읽거나 지우거나 바꾸지 않습니다. 외부 corpus를
 다운로드하거나 다른 SDK를 호출하지 않습니다.
 
@@ -213,13 +219,8 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 5. 태그를 만든 commit에서 release note를 작성하고, 작업 공간 ZIP 대신 GitHub가 생성한 source archive를
    사용합니다.
 
-위 확인이 끝난 뒤 tag를 만드는 예시는 다음과 같습니다.
-
-```bash
-RELEASE_TAG=0.2.0
-git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
-git push origin "$RELEASE_TAG"
-```
+기존 릴리스 tag `0.3.0`과 `0.4.0`은 변경하지 않습니다. 이후 변경은 새 semantic version을
+사용해야 하며, 어느 기존 버전도 다시 tag하지 마세요.
 
 배포를 철회해야 하면 영향을 받는 tag의 배포를 중단하고, 마지막으로 검증한 tag를 안내합니다. 같은
 버전으로 다른 commit을 다시 tag하지 마세요.

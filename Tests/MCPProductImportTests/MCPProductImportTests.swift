@@ -1,6 +1,7 @@
 import Foundation
 import MCPHTTPClient
 import MCPStdioClient
+import MCPTasks
 import XCTest
 
 #if os(macOS)
@@ -15,6 +16,7 @@ final class MCPProductImportTests: XCTestCase {
       additionalHeaders: headers
     )
     _ = MCPStdioLimits.default
+    _ = MCPTasksExtension.identifier
     #if os(macOS)
       _ = MCPXcodeProtocolRevision.preferred
     #endif

@@ -80,6 +80,29 @@ for pattern in '"resources/(subscribe|unsubscribe)"' '"logging/setLevel"' '"samp
 done
 printf 'PASS strict modern core + sealed Xcode compatibility boundary\n'
 
+printf '\n== Tasks extension boundary ==\n'
+test -f Sources/MCPTasks/MCPTasksModels.swift || { echo 'FAIL MCPTasks product is missing' >&2; exit 1; }
+grep -q '.library(name: "MCPTasks", targets: \["MCPTasks"\])' Package.swift
+grep -q '.target(name: "MCPTasks", dependencies: \["MCP"\]' Package.swift
+rg -q 'io\.modelcontextprotocol/tasks' Sources/MCPTasks/MCPTasksModels.swift
+for method in '"tasks/get"' '"tasks/update"' '"tasks/cancel"'; do
+  rg -q "$method" Sources/MCPTasks/MCPTasksModels.swift || {
+    printf 'FAIL missing Tasks method: %s\n' "$method" >&2
+    exit 1
+  }
+done
+for pattern in '"tasks/(result|list)"' '"notifications/tasks"' '"(submitted|unknown)"' 'tasks\.requests\.'; do
+  if rg -n "$pattern" Sources/MCPTasks; then
+    printf 'FAIL forbidden Tasks legacy/unwired surface: %s\n' "$pattern" >&2
+    exit 1
+  fi
+done
+if rg -n 'MCPTasks|io\.modelcontextprotocol/tasks|"tasks/(get|update|cancel)"' Sources/MCP; then
+  echo 'FAIL Tasks-specific implementation leaked into MCP core' >&2
+  exit 1
+fi
+printf 'PASS independent stable Tasks extension boundary\n'
+
 printf '\n== distribution hygiene ==\n'
 if rg -n '/(Users|home)/|\.build/(debug|release)/' Package.swift README.md README.ko.md Sources Scripts; then
   echo 'FAIL non-portable path in distribution inputs' >&2

@@ -32,7 +32,31 @@ teardown, immediate reconnect, and process restart. It also contains an opt-in l
 test-only transparent proxy that record the production client's real `xcrun mcpbridge` JSONL wire.
 See `XcodeQualification.md`.
 
-This delivery intentionally does not execute macOS/Xcode runtime verification. Real Apple
-interoperability therefore remains external: run the live qualification on each target Xcode release
-and retain its transcript. Until that is done, live Xcode compatibility is **UNKNOWN** rather than
-inferred from the mock.
+Live qualification was executed on Xcode 26.6 (17F113), macOS 26.6.2. After the per-agent approval
+alert was explicitly allowed, both qualified revisions `2025-03-26` and `2025-06-18` passed
+initialize, `tools/list`, `XcodeListWindows`, and clean bridge exit end to end. The approval was
+deliberately not persisted (`Don't ask again` remained unchecked), so an unapproved alert can leave
+Xcode waiting and appear as a `tools/list` timeout; that is an environment/operation condition, not
+evidence of an MCPXcode transport or protocol defect.
+
+The live `BuildProject` call against the `kairos.xcworkspace` workspace also reached Xcode and
+returned a structured result. The active Analytics build then failed downstream because
+`TCAFoundation` could not resolve 13 module dependencies; this is a kairosi project dependency
+failure, not an MCPXcode transport or protocol failure.
+
+## Official conformance runner and Tasks diagnostics
+
+The official `modelcontextprotocol/conformance` runner is available, with requirements frozen for
+the `2026-07-28` specification. Its Tasks scenarios are currently unscored requirements, and
+upstream issue #424 can report false wire-schema failures for a valid `resultType: "task"` response.
+SwiftMCP treats that runner as a useful diagnostic input, not as a passed qualification. The runner
+and its schema corpus are not installed, downloaded, or vendored into this package.
+
+## Tasks schema lower-bound interpretation
+
+The stable `modelcontextprotocol/ext-tasks` `2026-07-28` schema represents `taskId` as a string and
+`ttlMs` / `pollIntervalMs` as safe integers without `minLength` or `minimum: 0` constraints. SwiftMCP
+rejects empty task IDs because they cannot provide a valid lifecycle or HTTP `Mcp-Name` routing key,
+but its millisecond model accepts every mathematical integer in the inclusive JSON safe range
+`-9007199254740991...9007199254740991`, including negative values. A host may reject negative
+producer values as a local policy; that is not a protocol-level MUST enforced by this SDK.

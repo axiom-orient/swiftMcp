@@ -7,8 +7,8 @@ and its [schema reference at that commit](https://github.com/modelcontextprotoco
 
 SwiftMCP implements a strict, stateless MCP profile for typed Swift clients and servers. It has no
 external SwiftPM dependencies.
-Its canonical product identity is the 2026 stateless `MCP` runtime plus transports and the sealed
-`MCPXcode` interoperability edge.
+Its canonical product identity is the strict 2026 stateless `MCP` runtime, the independent official
+`MCPTasks` extension implementation, and the sealed `MCPXcode` interoperability edge.
 
 한국어 안내: [README.ko.md](README.ko.md)
 
@@ -21,6 +21,9 @@ Its canonical product identity is the 2026 stateless `MCP` runtime plus transpor
   `roots`), request-scoped logging, cache contracts, and bounded local JSON Schema validation.
   MRTR keeps `requestState` opaque and separates wire-shape validation from application content
   policy; see [Documentation/MRTR.md](Documentation/MRTR.md).
+- `MCPTasks` independently implements the stable `io.modelcontextprotocol/tasks` extension for the
+  same 2026-07-28 profile. It owns task lifecycle semantics without adding task state or legacy task
+  RPCs to `MCP`. See [Documentation/MCPTasks.md](Documentation/MCPTasks.md).
 - The modern core does not include `initialize`, session headers, legacy transports, migration,
   downgrade behavior, JSON-RPC batch, server-originated requests, or automatic OAuth retries.
 - `MCPXcode` is the one sealed compatibility boundary: a macOS-only client for Apple's
@@ -34,11 +37,12 @@ host can explicitly supply another validator.
 
 ## Install
 
-Add SwiftMCP from GitHub. The current repository tag is `0.2.0`.
+Add SwiftMCP from GitHub with the current release tag `0.4.0`. This release includes the independent
+`MCPTasks` product and the previously released stateless core, transports, and Xcode edge.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.2.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.3.0")
 ]
 ```
 
@@ -65,6 +69,7 @@ For a local checkout, use a relative path that matches your workspace:
 | Product | Purpose |
 | --- | --- |
 | `MCP` | Protocol models, JSON-RPC wire codec, stateless runtime, schema validation, MRTR, subscriptions, and cache contracts |
+| `MCPTasks` | Stable `io.modelcontextprotocol/tasks` extension with task-aware tool results plus `tasks/get`, `tasks/update`, and `tasks/cancel` |
 | `MCPHTTPClient` / `MCPHTTPServer` | Request-scoped HTTP POST with JSON or SSE responses |
 | `MCPStdioClient` / `MCPStdioServer` | Child-process stdio transport and server runner |
 | `MCPXcode` | macOS-only narrow adapter for Apple's `xcrun mcpbridge`; legacy lifecycle stays outside the 2026 core |
@@ -196,7 +201,7 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
 `verify.sh` runs strict formatting, warnings-as-errors Debug and Release builds, the full local test
-suite (including JSON Schema tests), and the local stdio conformance smoke flow. It uses an isolated
+suite (including MCPTasks and JSON Schema tests), and the local stdio conformance smoke flow. It uses an isolated
 SwiftPM scratch directory and never reads, deletes, or replaces the repository’s `.build`; it does
 not download external corpora or invoke another SDK.
 
@@ -216,13 +221,8 @@ metadata.
 5. Publish release notes from that tagged commit and use GitHub’s generated source archive rather
    than a workspace ZIP.
 
-Example tag commands, after the checks above:
-
-```bash
-RELEASE_TAG=0.2.0
-git tag -a "$RELEASE_TAG" -m "SwiftMCP $RELEASE_TAG"
-git push origin "$RELEASE_TAG"
-```
+Existing release tags `0.3.0` and `0.4.0` are immutable. Future changes require a new semantic
+version; never retag either existing version.
 
 If a release must be withdrawn, stop distribution of the affected tag and direct consumers to the
 last verified tag. Do not retag a different commit under the same version.
