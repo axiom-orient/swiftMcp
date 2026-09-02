@@ -60,11 +60,14 @@ public struct MCPMethodDescriptor: Sendable, Hashable {
     extensionIdentifier: String? = nil
   ) throws {
     let namespacedExtension = MCPMethodRegistry.isValidMethodName(name, extensionMethod: true)
+    let standardAugmentation = isExtension && MCPMethodRegistry.isStandardMethodName(name)
     let officialExtensionMethod =
-      isExtension && MCPMethodRegistry.isValidMethodName(name, extensionMethod: false)
+      isExtension
+      && extensionIdentifier.map(MCPMethodRegistry.isOfficialExtensionIdentifier) == true
+      && MCPMethodRegistry.isValidMethodName(name, extensionMethod: false)
     let validName =
       isExtension
-      ? namespacedExtension || officialExtensionMethod
+      ? namespacedExtension || standardAugmentation || officialExtensionMethod
       : MCPMethodRegistry.isValidMethodName(name, extensionMethod: false)
     guard validName, !isExtension || !MCPMethodRegistry.isRetiredCoreMethodName(name) else {
       throw MCPRegistryError.invalidMethodName(name)
@@ -295,9 +298,14 @@ public struct MCPMethodRegistry: Sendable, Equatable {
     name: String,
     descriptor: MCPMethodDescriptor
   ) -> Bool {
-    isValidMethodName(name, extensionMethod: true)
-      || (descriptor.extensionIdentifier != nil
-        && isValidMethodName(name, extensionMethod: false))
+    if isValidMethodName(name, extensionMethod: true) { return true }
+    if standardDescriptorNames.contains(name) { return descriptor.extensionIdentifier != nil }
+    guard let identifier = descriptor.extensionIdentifier,
+      isOfficialExtensionIdentifier(identifier)
+    else {
+      return false
+    }
+    return isValidMethodName(name, extensionMethod: false)
   }
 
   private static func augment(
@@ -335,6 +343,10 @@ public struct MCPMethodRegistry: Sendable, Equatable {
   // extension namespaces and cannot be reintroduced through the generic extension registry.
   fileprivate static func isRetiredCoreMethodName(_ value: String) -> Bool {
     retiredCoreMethodNames.contains(value)
+  }
+
+  fileprivate static func isStandardMethodName(_ value: String) -> Bool {
+    standardDescriptorNames.contains(value)
   }
 
   private static let retiredCoreMethodNames: Set<String> = [
@@ -380,6 +392,7 @@ public struct MCPMethodRegistry: Sendable, Equatable {
     listenDescriptor,
     bidirectionalNotification("notifications/cancelled"),
     serverNotification("notifications/progress"),
+    serverNotification("notifications/message"),
     serverNotification("notifications/subscriptions/acknowledged"),
     serverNotification("notifications/tools/list_changed"),
     serverNotification("notifications/prompts/list_changed"),

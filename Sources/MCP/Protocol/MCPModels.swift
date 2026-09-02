@@ -86,19 +86,22 @@ public struct MCPRequestContext: Sendable {
   public let metadata: MCPRequestMetadata
   public let authorization: MCPAuthorizationContext
   public let progress: MCPProgressReporter?
+  public let logger: MCPRequestLogger?
 
   public init(
     id: MCPRequestID,
     method: MCPMethodDescriptor,
     metadata: MCPRequestMetadata,
     authorization: MCPAuthorizationContext,
-    progress: MCPProgressReporter?
+    progress: MCPProgressReporter?,
+    logger: MCPRequestLogger? = nil
   ) {
     self.id = id
     self.method = method
     self.metadata = metadata
     self.authorization = authorization
     self.progress = progress
+    self.logger = logger
   }
 }
 
@@ -1117,19 +1120,18 @@ public struct MCPListToolsResult: Sendable, Hashable, MCPJSONModel {
 public struct MCPCallToolParams: Sendable, Hashable, MCPJSONModel {
   public let name: String
   public let arguments: [String: MCPJSONValue]
-  public let inputResponses: [String: MCPElicitationResult]
+  public let inputResponses: [String: MCPInputResponse]
   public let requestState: String?
 
   public init(
     name: String,
     arguments: [String: MCPJSONValue] = [:],
-    inputResponses: [String: MCPElicitationResult] = [:],
+    inputResponses: [String: MCPInputResponse] = [:],
     requestState: String? = nil
   ) throws {
     guard !name.isEmpty else {
       throw MCPJSONError.invalidField(field: "name", reason: "must not be empty")
     }
-    try mcpValidateMRTRRetry(inputResponses: inputResponses, requestState: requestState)
     self.name = name
     self.arguments = arguments
     self.inputResponses = inputResponses
@@ -1162,7 +1164,7 @@ public struct MCPCallToolResult: Sendable, Hashable, MCPJSONModel {
   public let content: [MCPContentBlock]
   public let structuredContent: MCPJSONValue?
   public let isError: Bool
-  public let inputRequests: [String: MCPElicitationRequest]
+  public let inputRequests: [String: MCPInputRequest]
   public let requestState: String?
   public let metadata: MCPResultMetadata?
 
@@ -1171,7 +1173,7 @@ public struct MCPCallToolResult: Sendable, Hashable, MCPJSONModel {
     structuredContent: MCPJSONValue? = nil,
     isError: Bool = false,
     resultType: MCPResultType = .complete,
-    inputRequests: [String: MCPElicitationRequest] = [:],
+    inputRequests: [String: MCPInputRequest] = [:],
     requestState: String? = nil,
     metadata: MCPResultMetadata? = nil
   ) throws {
@@ -1387,19 +1389,18 @@ public struct MCPListPromptsResult: Sendable, Hashable, MCPJSONModel {
 public struct MCPGetPromptParams: Sendable, Hashable, MCPJSONModel {
   public let name: String
   public let arguments: [String: String]
-  public let inputResponses: [String: MCPElicitationResult]
+  public let inputResponses: [String: MCPInputResponse]
   public let requestState: String?
 
   public init(
     name: String,
     arguments: [String: String] = [:],
-    inputResponses: [String: MCPElicitationResult] = [:],
+    inputResponses: [String: MCPInputResponse] = [:],
     requestState: String? = nil
   ) throws {
     guard !name.isEmpty else {
       throw MCPJSONError.invalidField(field: "name", reason: "must not be empty")
     }
-    try mcpValidateMRTRRetry(inputResponses: inputResponses, requestState: requestState)
     self.name = name
     self.arguments = arguments
     self.inputResponses = inputResponses
@@ -1436,7 +1437,7 @@ public struct MCPGetPromptResult: Sendable, Hashable, MCPJSONModel {
   public let resultType: MCPResultType
   public let descriptionText: String?
   public let messages: [MCPPromptMessage]
-  public let inputRequests: [String: MCPElicitationRequest]
+  public let inputRequests: [String: MCPInputRequest]
   public let requestState: String?
   public let metadata: MCPResultMetadata?
 
@@ -1444,7 +1445,7 @@ public struct MCPGetPromptResult: Sendable, Hashable, MCPJSONModel {
     description: String? = nil,
     messages: [MCPPromptMessage] = [],
     resultType: MCPResultType = .complete,
-    inputRequests: [String: MCPElicitationRequest] = [:],
+    inputRequests: [String: MCPInputRequest] = [:],
     requestState: String? = nil,
     metadata: MCPResultMetadata? = nil
   ) throws {
@@ -1727,15 +1728,14 @@ public struct MCPListResourceTemplatesResult: Sendable, Hashable, MCPJSONModel {
 
 public struct MCPReadResourceParams: Sendable, Hashable, MCPJSONModel {
   public let uri: String
-  public let inputResponses: [String: MCPElicitationResult]
+  public let inputResponses: [String: MCPInputResponse]
   public let requestState: String?
   public init(
-    uri: String, inputResponses: [String: MCPElicitationResult] = [:], requestState: String? = nil
+    uri: String, inputResponses: [String: MCPInputResponse] = [:], requestState: String? = nil
   ) throws {
     guard !uri.isEmpty else {
       throw MCPJSONError.invalidField(field: "uri", reason: "must not be empty")
     }
-    try mcpValidateMRTRRetry(inputResponses: inputResponses, requestState: requestState)
     self.uri = uri
     self.inputResponses = inputResponses
     self.requestState = requestState
@@ -1760,7 +1760,7 @@ public struct MCPReadResourceResult: Sendable, Hashable, MCPJSONModel {
   public let resultType: MCPResultType
   public let contents: [MCPResourceContents]
   public let cache: MCPCachePolicy?
-  public let inputRequests: [String: MCPElicitationRequest]
+  public let inputRequests: [String: MCPInputRequest]
   public let requestState: String?
   public let metadata: MCPResultMetadata?
 
@@ -1768,7 +1768,7 @@ public struct MCPReadResourceResult: Sendable, Hashable, MCPJSONModel {
     contents: [MCPResourceContents] = [],
     cache: MCPCachePolicy? = .defaultResourceRead,
     resultType: MCPResultType = .complete,
-    inputRequests: [String: MCPElicitationRequest] = [:],
+    inputRequests: [String: MCPInputRequest] = [:],
     requestState: String? = nil,
     metadata: MCPResultMetadata? = nil
   ) throws {
@@ -2208,55 +2208,34 @@ private func mcpRequiredCompleteResultType(_ object: MCPJSONObject) throws -> MC
   return resultType
 }
 
-private func mcpDecodeInputRequests(_ value: MCPJSONValue?) throws -> [String:
-  MCPElicitationRequest]
-{
+private func mcpDecodeInputRequests(_ value: MCPJSONValue?) throws -> [String: MCPInputRequest] {
   guard let value else { return [:] }
   guard case .object(let object) = value else {
     throw MCPJSONError.invalidField(field: "inputRequests", reason: "expected object")
   }
-  var result: [String: MCPElicitationRequest] = [:]
+  var result: [String: MCPInputRequest] = [:]
   for (key, request) in object {
-    guard !key.isEmpty else {
-      throw MCPJSONError.invalidField(field: "inputRequests", reason: "keys must not be empty")
-    }
-    result[key] = try MCPElicitationRequest(json: request)
+    result[key] = try MCPInputRequest(json: request)
   }
   return result
 }
 
-private func mcpDecodeInputResponses(_ value: MCPJSONValue?) throws -> [String:
-  MCPElicitationResult]
-{
+private func mcpDecodeInputResponses(_ value: MCPJSONValue?) throws -> [String: MCPInputResponse] {
   guard let value else { return [:] }
   guard case .object(let object) = value else {
     throw MCPJSONError.invalidField(field: "inputResponses", reason: "expected object")
   }
-  var result: [String: MCPElicitationResult] = [:]
+  var result: [String: MCPInputResponse] = [:]
   for (key, response) in object {
-    guard !key.isEmpty else {
-      throw MCPJSONError.invalidField(field: "inputResponses", reason: "keys must not be empty")
-    }
-    result[key] = try MCPElicitationResult(json: response)
+    result[key] = try MCPInputResponse(json: response)
   }
   return result
-}
-
-private func mcpValidateMRTRRetry(
-  inputResponses: [String: MCPElicitationResult], requestState: String?
-) throws {
-  guard inputResponses.keys.allSatisfy({ !$0.isEmpty }) else {
-    throw MCPJSONError.invalidField(field: "inputResponses", reason: "keys must not be empty")
-  }
-  if let requestState, requestState.isEmpty {
-    throw MCPJSONError.invalidField(field: "requestState", reason: "must not be empty")
-  }
 }
 
 private func mcpValidateOperationResult(
   resultType: MCPResultType,
   hasCompleteField: Bool,
-  inputRequests: [String: MCPElicitationRequest],
+  inputRequests: [String: MCPInputRequest],
   requestState: String?,
   completeField: String
 ) throws {
@@ -2272,12 +2251,6 @@ private func mcpValidateOperationResult(
       throw MCPJSONError.invalidField(
         field: "resultType", reason: "input_required requires inputRequests or requestState")
     }
-    guard inputRequests.keys.allSatisfy({ !$0.isEmpty }) else {
-      throw MCPJSONError.invalidField(field: "inputRequests", reason: "keys must not be empty")
-    }
-    if let requestState, requestState.isEmpty {
-      throw MCPJSONError.invalidField(field: "requestState", reason: "must not be empty")
-    }
   case .extensionValue:
     break
   }
@@ -2286,7 +2259,7 @@ private func mcpValidateOperationResult(
 private func mcpOperationResultJSON(
   resultType: MCPResultType,
   completeFields: [(String, MCPJSONValue?)],
-  inputRequests: [String: MCPElicitationRequest],
+  inputRequests: [String: MCPInputRequest],
   requestState: String?,
   metadata: MCPResultMetadata?
 ) -> MCPJSONValue {

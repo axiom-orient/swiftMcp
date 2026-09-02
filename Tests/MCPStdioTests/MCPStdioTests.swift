@@ -96,6 +96,32 @@ final class MCPStdioTests: XCTestCase {
     }
   }
 
+  func testLineFramerAcceptsCoalescedFramesAfterMaximumPartialLine() throws {
+    var framer = try MCPStdioLineFramer(maximumFrameBytes: 3)
+    XCTAssertEqual(try framer.append(Data("abc".utf8)), [])
+    XCTAssertEqual(
+      try framer.append(Data("\ndef\n".utf8)),
+      [Data("abc".utf8), Data("def".utf8)]
+    )
+    XCTAssertNoThrow(try framer.finish())
+  }
+
+  func testLineFramerDoesNotCountTerminalCRAgainstFrameLimit() throws {
+    var oneChunk = try MCPStdioLineFramer(maximumFrameBytes: 3)
+    XCTAssertEqual(try oneChunk.append(Data("abc\r\n".utf8)), [Data("abc".utf8)])
+    XCTAssertNoThrow(try oneChunk.finish())
+
+    var splitDelimiter = try MCPStdioLineFramer(maximumFrameBytes: 3)
+    XCTAssertEqual(try splitDelimiter.append(Data("abc".utf8)), [])
+    XCTAssertEqual(try splitDelimiter.append(Data("\r\n".utf8)), [Data("abc".utf8)])
+    XCTAssertNoThrow(try splitDelimiter.finish())
+
+    var splitCR = try MCPStdioLineFramer(maximumFrameBytes: 3)
+    XCTAssertEqual(try splitCR.append(Data("abc\r".utf8)), [])
+    XCTAssertEqual(try splitCR.append(Data("\n".utf8)), [Data("abc".utf8)])
+    XCTAssertNoThrow(try splitCR.finish())
+  }
+
   func testWriterProducesExactlyOneNewlineDelimitedFrame() async throws {
     let pipe = Pipe()
     let writer = MCPStdioWriter(handle: pipe.fileHandleForWriting)

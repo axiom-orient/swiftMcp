@@ -44,54 +44,48 @@ grep -q 'swiftLanguageModes: \[.v6\]' Package.swift
 printf 'PASS self-contained SwiftPM package\n'
 
 printf '\n== strict protocol surface ==\n'
-python3 - <<'PY'
-import pathlib
-import re
+CORE_PATHS=(Package.swift Sources/MCP Sources/MCPHTTPShared Sources/MCPHTTPClient Sources/MCPHTTPServer Sources/MCPStdioShared Sources/MCPStdioClient Sources/MCPStdioServer Sources/MCPConformanceClient Sources/MCPConformanceServer)
+for pattern in \
+  '20(24|25)-[0-9]{2}-[0-9]{2}' \
+  '"(initialize|notifications/initialized)"' \
+  '"resources/(subscribe|unsubscribe)"' \
+  '"logging/setLevel"' \
+  '\bMCP(Initialize|Session|Migration|Legacy|Compatibility)[A-Za-z0-9_]*\b' \
+  '"(mcp-session-id|last-event-id)"[[:space:]]*:'; do
+  if rg -n -i --glob '*.swift' --glob '*.c' --glob '*.h' "$pattern" "${CORE_PATHS[@]}"; then
+    printf 'FAIL forbidden modern-core surface: %s\n' "$pattern" >&2
+    exit 1
+  fi
+done
 
-root = pathlib.Path.cwd()
-production_files = [root / "Package.swift"] + sorted((root / "Sources").rglob("*"))
-production_files = [path for path in production_files if path.suffix in {".swift", ".c", ".h"}]
-production = "\n".join(path.read_text(encoding="utf-8") for path in production_files)
-for label, pattern in {
-    "pre-2026 protocol version": r"20(?:24|25)-[0-9]{2}-[0-9]{2}",
-    "removed lifecycle method": r'"(?:initialize|notifications/initialized)"',
-    "removed resource subscription method": r'"resources/(?:subscribe|unsubscribe)"',
-    "removed logging method": r'"logging/setLevel"',
-    "legacy public type": r"\bMCP(?:Initialize|Session|Migration|Legacy|Compatibility)[A-Za-z0-9_]*\b",
-    "legacy header emission": r'"(?:mcp-session-id|last-event-id)"\s*:',
-}.items():
-    assert re.search(pattern, production, flags=re.IGNORECASE) is None, label
-
-print("PASS strict-only production surface")
-PY
+XCODE_PATH=Sources/MCPXcode/MCPXcode.swift
+test -f "$XCODE_PATH" || { echo 'FAIL MCPXcode boundary is missing' >&2; exit 1; }
+for revision in 2024-11-05 2025-03-26 2025-06-18; do
+  rg -q "= \"$revision\"" "$XCODE_PATH" || {
+    printf 'FAIL missing qualified Xcode revision: %s\n' "$revision" >&2
+    exit 1
+  }
+done
+for method in '"initialize"' '"notifications/initialized"' '"tools/list"' '"tools/call"'; do
+  rg -q "$method" "$XCODE_PATH" || {
+    printf 'FAIL missing Xcode method: %s\n' "$method" >&2
+    exit 1
+  }
+done
+for pattern in '"resources/(subscribe|unsubscribe)"' '"logging/setLevel"' '"sampling/createMessage"' '"roots/list"' '"elicitation/create"' '"mcp-session-id"' '"last-event-id"'; do
+  if rg -n -i "$pattern" "$XCODE_PATH"; then
+    printf 'FAIL forbidden Xcode surface: %s\n' "$pattern" >&2
+    exit 1
+  fi
+done
+printf 'PASS strict modern core + sealed Xcode compatibility boundary\n'
 
 printf '\n== distribution hygiene ==\n'
-python3 - <<'PY'
-import pathlib
-import re
-
-root = pathlib.Path.cwd()
-paths = [root / "Package.swift", root / "README.md", root / "README.ko.md"]
-paths += sorted((root / "Sources").rglob("*"))
-paths += sorted((root / "Scripts").rglob("*"))
-paths += sorted((root / ".github").rglob("*"))
-for path in paths:
-    if not path.is_file() or path.suffix not in {"", ".swift", ".c", ".h", ".md", ".sh", ".yml"}:
-        continue
-    # Hidden files such as Finder .DS_Store metadata are distribution debris, not scanned
-    # inputs; skipping them keeps the gate failing on real violations instead of crashing
-    # on binary metadata that must never be committed in the first place.
-    if any(part.startswith(".") for part in path.relative_to(root).parts):
-        continue
-    text = path.read_text(encoding="utf-8")
-    for label, pattern in {
-        "personal absolute path": r"/(?:Users|home)/",
-        "fixed repository build-product path": r"\.build/(?:debug|release)/",
-    }.items():
-        assert re.search(pattern, text) is None, f"{label}: {path.relative_to(root)}"
-
-print("PASS portable distribution inputs")
-PY
+if rg -n '/(Users|home)/|\.build/(debug|release)/' Package.swift README.md README.ko.md Sources Scripts; then
+  echo 'FAIL non-portable path in distribution inputs' >&2
+  exit 1
+fi
+printf 'PASS portable distribution inputs\n'
 
 printf '\n== format lint ==\n'
 # --strict turns lint warnings into a non-zero exit; without it the gate passes while
@@ -107,9 +101,6 @@ swift test --scratch-path "$VERIFY_SCRATCH_PATH" --jobs "${SWIFT_BUILD_JOBS:-1}"
 printf '\n== release build ==\n'
 swift build --scratch-path "$VERIFY_SCRATCH_PATH" -c release --jobs "${SWIFT_BUILD_JOBS:-1}" -Xswiftc -warnings-as-errors
 
-printf '\n== JSON Schema 2020-12 corpus ==\n'
-SWIFTMCP_VERIFY_SCRATCH_PATH="$VERIFY_SCRATCH_PATH" bash ./Scripts/verify-json-schema-corpus.sh
-
 BIN_PATH="$(swift build --scratch-path "$VERIFY_SCRATCH_PATH" --show-bin-path)"
 
 printf '\n== stdio conformance smoke ==\n'
@@ -119,8 +110,5 @@ CONFORMANCE_OUTPUT="$("$BIN_PATH/mcp-conformance-client" "$BIN_PATH/mcp-conforma
   exit 1
 }
 printf '%s\n' "$CONFORMANCE_OUTPUT"
-
-printf '\n== external SDK conformance ==\n'
-SWIFTMCP_VERIFY_SCRATCH_PATH="$VERIFY_SCRATCH_PATH" bash ./Scripts/verify-external-conformance.sh
 
 printf '\nPASS all repository verification gates\n'

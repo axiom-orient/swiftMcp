@@ -107,6 +107,7 @@ public struct MCPStdioLimits: Sendable, Hashable {
 
 public struct MCPStdioLineFramer: Sendable {
   private var buffer = Data()
+  private var pendingCR = false
   private let maximumFrameBytes: Int
 
   public init(maximumFrameBytes: Int) throws {
@@ -117,32 +118,42 @@ public struct MCPStdioLineFramer: Sendable {
   }
 
   public mutating func append(_ chunk: Data) throws -> [Data] {
-    guard buffer.count <= maximumFrameBytes - min(chunk.count, maximumFrameBytes) else {
-      throw MCPStdioError.lineTooLarge(limit: maximumFrameBytes)
-    }
-    buffer.append(chunk)
     var frames: [Data] = []
-    while let newline = buffer.firstIndex(of: 0x0A) {
-      var frame = Data(buffer[..<newline])
-      buffer.removeSubrange(...newline)
-      if frame.last == 0x0D { frame.removeLast() }
-      guard !frame.contains(0x0D) else {
-        throw MCPStdioError.embeddedNewline
+
+    // Consume bytes as a bounded state machine. Keep a terminal CR outside the payload until the
+    // next byte confirms CRLF, so the delimiter never consumes a byte from the frame limit and may
+    // be split across read chunks without retaining an unbounded max+1 raw buffer.
+    for byte in chunk {
+      if pendingCR {
+        guard byte == 0x0A else {
+          throw MCPStdioError.embeddedNewline
+        }
+        pendingCR = false
+        let frame = buffer
+        buffer.removeAll(keepingCapacity: true)
+        if !frame.isEmpty { frames.append(frame) }
+        continue
       }
-      guard frame.count <= maximumFrameBytes else {
-        throw MCPStdioError.lineTooLarge(limit: maximumFrameBytes)
+
+      switch byte {
+      case 0x0A:
+        let frame = buffer
+        buffer.removeAll(keepingCapacity: true)
+        if !frame.isEmpty { frames.append(frame) }
+      case 0x0D:
+        pendingCR = true
+      default:
+        guard buffer.count < maximumFrameBytes else {
+          throw MCPStdioError.lineTooLarge(limit: maximumFrameBytes)
+        }
+        buffer.append(byte)
       }
-      if frame.isEmpty { continue }
-      frames.append(frame)
-    }
-    guard buffer.count <= maximumFrameBytes else {
-      throw MCPStdioError.lineTooLarge(limit: maximumFrameBytes)
     }
     return frames
   }
 
   public mutating func finish() throws {
-    guard buffer.isEmpty else { throw MCPStdioError.truncatedFrame }
+    guard buffer.isEmpty, !pendingCR else { throw MCPStdioError.truncatedFrame }
   }
 }
 

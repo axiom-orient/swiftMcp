@@ -37,7 +37,7 @@ public enum MCPMetaKey {
 /// The per-request logging threshold defined by the base protocol.
 ///
 /// This field is deprecated by MCP 2026-07-28 but remains interoperable for the specification's
-/// deprecation window. The runtime does not produce logging notifications itself.
+/// deprecation window. A request that omits it has explicitly opted out of protocol log messages.
 public enum MCPLoggingLevel: String, Sendable, Hashable, CaseIterable, MCPJSONModel {
   case debug, info, notice, warning, error, critical, alert, emergency
 
@@ -49,6 +49,19 @@ public enum MCPLoggingLevel: String, Sendable, Hashable, CaseIterable, MCPJSONMo
   }
 
   public var json: MCPJSONValue { .string(rawValue) }
+
+  var severity: Int {
+    switch self {
+    case .debug: 0
+    case .info: 1
+    case .notice: 2
+    case .warning: 3
+    case .error: 4
+    case .critical: 5
+    case .alert: 6
+    case .emergency: 7
+    }
+  }
 }
 
 public struct MCPImplementation: Sendable, Hashable, MCPJSONModel {
@@ -254,12 +267,30 @@ public struct MCPIcon: Sendable, Hashable, MCPJSONModel {
 }
 
 public struct MCPElicitationCapabilities: Sendable, Hashable, MCPJSONModel {
-  public var form: Bool
-  public var url: Bool
+  /// MCP models each elicitation mode as a JSONObject capability. The object is authoritative;
+  /// the Boolean properties are convenience views used by request validation.
+  public var formSettings: [String: MCPJSONValue]?
+  public var urlSettings: [String: MCPJSONValue]?
+
+  public var form: Bool {
+    get { formSettings != nil }
+    set {
+      formSettings = newValue ? (formSettings ?? [:]) : nil
+      if !newValue, urlSettings == nil { formSettings = [:] }
+    }
+  }
+
+  public var url: Bool {
+    get { urlSettings != nil }
+    set {
+      urlSettings = newValue ? (urlSettings ?? [:]) : nil
+      if !newValue, formSettings == nil { formSettings = [:] }
+    }
+  }
 
   public init() {
-    self.form = true
-    self.url = false
+    formSettings = [:]
+    urlSettings = nil
   }
 
   public init(form: Bool, url: Bool) throws {
@@ -267,50 +298,56 @@ public struct MCPElicitationCapabilities: Sendable, Hashable, MCPJSONModel {
       throw MCPJSONError.invalidField(
         field: "elicitation", reason: "strict mode requires form or url support")
     }
-    self.form = form
-    self.url = url
+    formSettings = form ? [:] : nil
+    urlSettings = url ? [:] : nil
+  }
+
+  public init(
+    formSettings: [String: MCPJSONValue]?,
+    urlSettings: [String: MCPJSONValue]?
+  ) throws {
+    guard formSettings != nil || urlSettings != nil else {
+      throw MCPJSONError.invalidField(
+        field: "elicitation", reason: "strict mode requires form or url support")
+    }
+    self.formSettings = formSettings
+    self.urlSettings = urlSettings
   }
 
   public init(json: MCPJSONValue) throws {
     let object = try MCPJSONObject(json)
-    if let formValue = object.values["form"], case .object = formValue {
-      form = true
-    } else if object.values["form"] == nil {
-      form = false
-    } else {
-      throw MCPJSONError.invalidField(field: "form", reason: "expected capability object")
-    }
-    if let urlValue = object.values["url"], case .object = urlValue {
-      url = true
-    } else if object.values["url"] == nil {
-      url = false
-    } else {
-      throw MCPJSONError.invalidField(field: "url", reason: "expected capability object")
-    }
-    // MCP 2026-07-28 defines an empty capability object as form-mode support.
-    if !form && !url {
-      form = true
-    }
+    formSettings = try object.optionalObject("form")
+    urlSettings = try object.optionalObject("url")
+    // MCP 2026-07-28 retains the historical empty-object meaning as form-mode support.
+    if formSettings == nil, urlSettings == nil { formSettings = [:] }
   }
 
   public var json: MCPJSONValue {
     var result: [String: MCPJSONValue] = [:]
-    if form { result["form"] = .object([:]) }
-    if url { result["url"] = .object([:]) }
+    if let formSettings { result["form"] = .object(formSettings) }
+    if let urlSettings { result["url"] = .object(urlSettings) }
     return .object(result)
   }
 }
 
 public struct MCPClientCapabilities: Sendable, Hashable, MCPJSONModel {
   public var elicitation: MCPElicitationCapabilities?
+  public var rootsSettings: [String: MCPJSONValue]?
+  public var roots: Bool {
+    get { rootsSettings != nil }
+    set { rootsSettings = newValue ? (rootsSettings ?? [:]) : nil }
+  }
+  public var sampling: MCPSamplingCapabilities?
   public var experimental: [String: MCPJSONValue]
   public var extensions: [String: MCPJSONValue]
-  /// Future extension fields. Known but unimplemented standard capabilities are not accepted
-  /// for locally constructed outbound metadata.
+  /// Future non-standard capability fields. Standard 2026 capability names are typed above.
   public var additionalCapabilities: [String: MCPJSONValue]
 
   public init(
     elicitation: MCPElicitationCapabilities? = nil,
+    roots: Bool = false,
+    rootsSettings: [String: MCPJSONValue]? = nil,
+    sampling: MCPSamplingCapabilities? = nil,
     experimental: [String: MCPJSONValue] = [:],
     extensions: [String: MCPJSONValue] = [:],
     additionalCapabilities: [String: MCPJSONValue] = [:]
@@ -322,6 +359,8 @@ public struct MCPClientCapabilities: Sendable, Hashable, MCPJSONModel {
       knownKeys: ["elicitation", "experimental", "extensions", "roots", "sampling"]
     )
     self.elicitation = elicitation
+    self.rootsSettings = rootsSettings ?? (roots ? [:] : nil)
+    self.sampling = sampling
     self.experimental = experimental
     self.extensions = extensions
     self.additionalCapabilities = additionalCapabilities
@@ -330,18 +369,22 @@ public struct MCPClientCapabilities: Sendable, Hashable, MCPJSONModel {
   public init(json: MCPJSONValue) throws {
     let object = try MCPJSONObject(json)
     elicitation = try object.values["elicitation"].map(MCPElicitationCapabilities.init(json:))
+    rootsSettings = try object.optionalObject("roots")
+    sampling = try object.values["sampling"].map(MCPSamplingCapabilities.init(json:))
     experimental = try object.optionalObject("experimental") ?? [:]
     try MCPProtocolValidation.validateExperimentalCapabilities(experimental)
     extensions = try object.optionalObject("extensions") ?? [:]
     try MCPProtocolValidation.validateExtensions(extensions)
     additionalCapabilities = object.values.filter {
-      !["elicitation", "experimental", "extensions"].contains($0.key)
+      !["elicitation", "roots", "sampling", "experimental", "extensions"].contains($0.key)
     }
   }
 
   public var json: MCPJSONValue {
     var result = additionalCapabilities
     if let elicitation { result["elicitation"] = elicitation.json }
+    if let rootsSettings { result["roots"] = .object(rootsSettings) }
+    if let sampling { result["sampling"] = sampling.json }
     if !experimental.isEmpty { result["experimental"] = .object(experimental) }
     if !extensions.isEmpty { result["extensions"] = .object(extensions) }
     return .object(result)
@@ -349,29 +392,72 @@ public struct MCPClientCapabilities: Sendable, Hashable, MCPJSONModel {
 }
 
 public struct MCPServerCapabilities: Sendable, Hashable, MCPJSONModel {
-  public var tools: Bool
-  public var toolListChanged: Bool
-  public var prompts: Bool
-  public var promptListChanged: Bool
-  public var resources: Bool
-  public var resourceListChanged: Bool
-  public var resourceSubscriptions: Bool
-  public var completions: Bool
+  public var toolSettings: [String: MCPJSONValue]?
+  public var tools: Bool {
+    get { toolSettings != nil }
+    set { toolSettings = newValue ? (toolSettings ?? [:]) : nil }
+  }
+  public var toolListChanged: Bool {
+    get { Self.boolSetting(toolSettings, key: "listChanged") }
+    set { Self.setBoolSetting(&toolSettings, key: "listChanged", value: newValue) }
+  }
+
+  public var promptSettings: [String: MCPJSONValue]?
+  public var prompts: Bool {
+    get { promptSettings != nil }
+    set { promptSettings = newValue ? (promptSettings ?? [:]) : nil }
+  }
+  public var promptListChanged: Bool {
+    get { Self.boolSetting(promptSettings, key: "listChanged") }
+    set { Self.setBoolSetting(&promptSettings, key: "listChanged", value: newValue) }
+  }
+
+  public var resourceSettings: [String: MCPJSONValue]?
+  public var resources: Bool {
+    get { resourceSettings != nil }
+    set { resourceSettings = newValue ? (resourceSettings ?? [:]) : nil }
+  }
+  public var resourceListChanged: Bool {
+    get { Self.boolSetting(resourceSettings, key: "listChanged") }
+    set { Self.setBoolSetting(&resourceSettings, key: "listChanged", value: newValue) }
+  }
+  public var resourceSubscriptions: Bool {
+    get { Self.boolSetting(resourceSettings, key: "subscribe") }
+    set { Self.setBoolSetting(&resourceSettings, key: "subscribe", value: newValue) }
+  }
+
+  public var completionSettings: [String: MCPJSONValue]?
+  public var completions: Bool {
+    get { completionSettings != nil }
+    set { completionSettings = newValue ? (completionSettings ?? [:]) : nil }
+  }
+
+  public var loggingSettings: [String: MCPJSONValue]?
+  public var logging: Bool {
+    get { loggingSettings != nil }
+    set { loggingSettings = newValue ? (loggingSettings ?? [:]) : nil }
+  }
+
   public var experimental: [String: MCPJSONValue]
   public var extensions: [String: MCPJSONValue]
-  /// Future extension fields. Legacy standard capability names are not accepted for local
-  /// outbound advertisements.
+  /// Future non-standard capability fields. Standard 2026 capability names are typed above.
   public var additionalCapabilities: [String: MCPJSONValue]
 
   public init(
     tools: Bool = false,
     toolListChanged: Bool = false,
+    toolSettings: [String: MCPJSONValue]? = nil,
     prompts: Bool = false,
     promptListChanged: Bool = false,
+    promptSettings: [String: MCPJSONValue]? = nil,
     resources: Bool = false,
     resourceListChanged: Bool = false,
     resourceSubscriptions: Bool = false,
+    resourceSettings: [String: MCPJSONValue]? = nil,
     completions: Bool = false,
+    completionSettings: [String: MCPJSONValue]? = nil,
+    logging: Bool = false,
+    loggingSettings: [String: MCPJSONValue]? = nil,
     experimental: [String: MCPJSONValue] = [:],
     extensions: [String: MCPJSONValue] = [:],
     additionalCapabilities: [String: MCPJSONValue] = [:]
@@ -381,29 +467,46 @@ public struct MCPServerCapabilities: Sendable, Hashable, MCPJSONModel {
     try MCPProtocolValidation.validateAdditionalCapabilities(
       additionalCapabilities,
       knownKeys: [
-        "tools", "prompts", "resources", "completions", "experimental", "extensions", "logging",
+        "tools", "prompts", "resources", "completions", "logging", "experimental", "extensions",
       ]
     )
-    guard tools || !toolListChanged else {
-      throw MCPJSONError.invalidField(
-        field: "toolListChanged", reason: "requires tools capability")
+
+    let hasTools = tools || toolSettings != nil
+    let hasPrompts = prompts || promptSettings != nil
+    let hasResources = resources || resourceSettings != nil
+    guard hasTools || !toolListChanged else {
+      throw MCPJSONError.invalidField(field: "toolListChanged", reason: "requires tools capability")
     }
-    guard prompts || !promptListChanged else {
+    guard hasPrompts || !promptListChanged else {
       throw MCPJSONError.invalidField(
         field: "promptListChanged", reason: "requires prompts capability")
     }
-    guard resources || (!resourceListChanged && !resourceSubscriptions) else {
+    guard hasResources || (!resourceListChanged && !resourceSubscriptions) else {
       throw MCPJSONError.invalidField(
         field: "resources", reason: "listChanged and subscribe require resources capability")
     }
-    self.tools = tools
-    self.toolListChanged = toolListChanged
-    self.prompts = prompts
-    self.promptListChanged = promptListChanged
-    self.resources = resources
-    self.resourceListChanged = resourceListChanged
-    self.resourceSubscriptions = resourceSubscriptions
-    self.completions = completions
+
+    self.toolSettings = toolSettings ?? (tools ? [:] : nil)
+    if toolListChanged {
+      var settings = self.toolSettings ?? [:]
+      settings["listChanged"] = .bool(true)
+      self.toolSettings = settings
+    }
+    self.promptSettings = promptSettings ?? (prompts ? [:] : nil)
+    if promptListChanged {
+      var settings = self.promptSettings ?? [:]
+      settings["listChanged"] = .bool(true)
+      self.promptSettings = settings
+    }
+    self.resourceSettings = resourceSettings ?? (resources ? [:] : nil)
+    if resourceListChanged || resourceSubscriptions {
+      var settings = self.resourceSettings ?? [:]
+      if resourceListChanged { settings["listChanged"] = .bool(true) }
+      if resourceSubscriptions { settings["subscribe"] = .bool(true) }
+      self.resourceSettings = settings
+    }
+    self.completionSettings = completionSettings ?? (completions ? [:] : nil)
+    self.loggingSettings = loggingSettings ?? (logging ? [:] : nil)
     self.experimental = experimental
     self.extensions = extensions
     self.additionalCapabilities = additionalCapabilities
@@ -411,67 +514,68 @@ public struct MCPServerCapabilities: Sendable, Hashable, MCPJSONModel {
 
   public init(json: MCPJSONValue) throws {
     let object = try MCPJSONObject(json)
-    if let toolsObject = try object.optionalObject("tools") {
-      tools = true
-      toolListChanged = try MCPJSONObject(.object(toolsObject)).optionalBool("listChanged") ?? false
-    } else {
-      tools = false
-      toolListChanged = false
-    }
-    if let promptsObject = try object.optionalObject("prompts") {
-      prompts = true
-      promptListChanged =
-        try MCPJSONObject(.object(promptsObject)).optionalBool("listChanged") ?? false
-    } else {
-      prompts = false
-      promptListChanged = false
-    }
-    if let resourcesObject = try object.optionalObject("resources") {
-      resources = true
-      let resourceObject = try MCPJSONObject(.object(resourcesObject))
-      resourceListChanged = try resourceObject.optionalBool("listChanged") ?? false
-      resourceSubscriptions = try resourceObject.optionalBool("subscribe") ?? false
-    } else {
-      resources = false
-      resourceListChanged = false
-      resourceSubscriptions = false
-    }
-    if let completionValue = object.values["completions"] {
-      guard case .object = completionValue else {
-        throw MCPJSONError.invalidField(field: "completions", reason: "expected capability object")
-      }
-      completions = true
-    } else {
-      completions = false
-    }
+    toolSettings = try object.optionalObject("tools")
+    promptSettings = try object.optionalObject("prompts")
+    resourceSettings = try object.optionalObject("resources")
+    completionSettings = try object.optionalObject("completions")
+    loggingSettings = try object.optionalObject("logging")
     experimental = try object.optionalObject("experimental") ?? [:]
     try MCPProtocolValidation.validateExperimentalCapabilities(experimental)
     extensions = try object.optionalObject("extensions") ?? [:]
     try MCPProtocolValidation.validateExtensions(extensions)
     additionalCapabilities = object.values.filter {
-      !["tools", "prompts", "resources", "completions", "experimental", "extensions"].contains(
-        $0.key)
+      !["tools", "prompts", "resources", "completions", "logging", "experimental", "extensions"]
+        .contains($0.key)
     }
+
+    // Known capability settings remain type-checked while the complete JSONObject is preserved.
+    _ = try Self.optionalBool(toolSettings, key: "listChanged", field: "tools.listChanged")
+    _ = try Self.optionalBool(promptSettings, key: "listChanged", field: "prompts.listChanged")
+    _ = try Self.optionalBool(resourceSettings, key: "listChanged", field: "resources.listChanged")
+    _ = try Self.optionalBool(resourceSettings, key: "subscribe", field: "resources.subscribe")
   }
 
   public var json: MCPJSONValue {
     var result = additionalCapabilities
-    if tools {
-      result["tools"] = .object(toolListChanged ? ["listChanged": .bool(true)] : [:])
-    }
-    if prompts {
-      result["prompts"] = .object(promptListChanged ? ["listChanged": .bool(true)] : [:])
-    }
-    if resources {
-      var resource: [String: MCPJSONValue] = [:]
-      if resourceListChanged { resource["listChanged"] = .bool(true) }
-      if resourceSubscriptions { resource["subscribe"] = .bool(true) }
-      result["resources"] = .object(resource)
-    }
-    if completions { result["completions"] = .object([:]) }
+    if let toolSettings { result["tools"] = .object(toolSettings) }
+    if let promptSettings { result["prompts"] = .object(promptSettings) }
+    if let resourceSettings { result["resources"] = .object(resourceSettings) }
+    if let completionSettings { result["completions"] = .object(completionSettings) }
+    if let loggingSettings { result["logging"] = .object(loggingSettings) }
     if !experimental.isEmpty { result["experimental"] = .object(experimental) }
     if !extensions.isEmpty { result["extensions"] = .object(extensions) }
     return .object(result)
+  }
+
+  private static func boolSetting(
+    _ settings: [String: MCPJSONValue]?,
+    key: String
+  ) -> Bool {
+    guard case .bool(let value)? = settings?[key] else { return false }
+    return value
+  }
+
+  private static func setBoolSetting(
+    _ settings: inout [String: MCPJSONValue]?,
+    key: String,
+    value: Bool
+  ) {
+    guard settings != nil || value else { return }
+    var object = settings ?? [:]
+    object[key] = .bool(value)
+    settings = object
+  }
+
+  private static func optionalBool(
+    _ settings: [String: MCPJSONValue]?,
+    key: String,
+    field: String
+  ) throws -> Bool? {
+    guard let raw = settings?[key] else { return nil }
+    guard case .bool(let value) = raw else {
+      throw MCPJSONError.invalidField(field: field, reason: "expected boolean")
+    }
+    return value
   }
 }
 

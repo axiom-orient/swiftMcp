@@ -35,7 +35,14 @@ private struct ConceptTranscriptTransport: MCPClientTransport {
   }
 }
 
-private actor ConceptElicitationProvider: MCPElicitationProvider {
+extension MCPInputResponse {
+  fileprivate var elicitationResult: MCPElicitationResult? {
+    guard case .elicitation(let result) = self else { return nil }
+    return result
+  }
+}
+
+private actor ConceptInputProvider: MCPInputProvider {
   private let response: MCPElicitationResult
   private var capturedContexts: [MCPMRTRContext] = []
 
@@ -43,13 +50,15 @@ private actor ConceptElicitationProvider: MCPElicitationProvider {
     self.response = response
   }
 
-  func elicit(
-    _ request: MCPElicitationRequest,
+  func resolve(
+    _ request: MCPInputRequest,
     context: MCPMRTRContext
-  ) async throws -> MCPElicitationResult {
-    _ = request
+  ) async throws -> MCPInputResponse {
+    guard case .elicitation = request else {
+      throw MCPClientError.protocolViolation("concept provider expected elicitation")
+    }
     capturedContexts.append(context)
-    return response
+    return .elicitation(response)
   }
 
   func contexts() -> [MCPMRTRContext] { capturedContexts }
@@ -183,7 +192,7 @@ final class MCPProtocolConceptTests: XCTestCase {
     let input = MCPElicitationRequest(params: form)
     let pending = try MCPCallToolResult(
       resultType: .inputRequired,
-      inputRequests: ["confirm": input],
+      inputRequests: ["confirm": .elicitation(input)],
       requestState: "deployment-1"
     )
     let completed = try MCPCallToolResult(
@@ -199,7 +208,7 @@ final class MCPProtocolConceptTests: XCTestCase {
       ],
       [.result(MCPWireResult(id: MCPRequestID(41), value: completed.json.objectValue ?? [:]))],
     ])
-    let provider = ConceptElicitationProvider(
+    let provider = ConceptInputProvider(
       response: try MCPElicitationResult(action: .accept, content: ["confirmed": .bool(true)])
     )
     let client = try client(
@@ -236,7 +245,8 @@ final class MCPProtocolConceptTests: XCTestCase {
     XCTAssertEqual(retry.name, "deploy")
     XCTAssertEqual(retry.arguments, ["region": .string("ap-northeast-2")])
     XCTAssertEqual(retry.requestState, "deployment-1")
-    XCTAssertEqual(retry.inputResponses["confirm"]?.content, ["confirmed": .bool(true)])
+    XCTAssertEqual(
+      retry.inputResponses["confirm"]?.elicitationResult?.content, ["confirmed": .bool(true)])
   }
 
   func testMRTRRetriesPromptAndResourceOperationsWithoutConnectionState() async throws {
@@ -249,14 +259,14 @@ final class MCPProtocolConceptTests: XCTestCase {
     )
     let promptInputRequired = try MCPGetPromptResult(
       resultType: .inputRequired,
-      inputRequests: ["authorize": request],
+      inputRequests: ["authorize": .elicitation(request)],
       requestState: "prompt-state"
     )
     let promptComplete = try MCPGetPromptResult(messages: [])
     let resourceInputRequired = try MCPReadResourceResult(
       cache: nil,
       resultType: .inputRequired,
-      inputRequests: ["authorize": request],
+      inputRequests: ["authorize": .elicitation(request)],
       requestState: "resource-state"
     )
     let resourceComplete = try MCPReadResourceResult(contents: [])
@@ -281,7 +291,7 @@ final class MCPProtocolConceptTests: XCTestCase {
           MCPWireResult(id: MCPRequestID(63), value: resourceComplete.json.objectValue ?? [:]))
       ],
     ])
-    let provider = ConceptElicitationProvider(
+    let provider = ConceptInputProvider(
       response: try MCPElicitationResult(action: .accept)
     )
     let client = try client(
@@ -315,10 +325,10 @@ final class MCPProtocolConceptTests: XCTestCase {
     let resourceRetry = try MCPReadResourceParams(json: .object(requests[3].params))
     XCTAssertEqual(promptRetry.arguments, ["language": "swift"])
     XCTAssertEqual(promptRetry.requestState, "prompt-state")
-    XCTAssertEqual(promptRetry.inputResponses["authorize"]?.action, .accept)
+    XCTAssertEqual(promptRetry.inputResponses["authorize"]?.elicitationResult?.action, .accept)
     XCTAssertEqual(resourceRetry.uri, "file:///workspace/readme")
     XCTAssertEqual(resourceRetry.requestState, "resource-state")
-    XCTAssertEqual(resourceRetry.inputResponses["authorize"]?.action, .accept)
+    XCTAssertEqual(resourceRetry.inputResponses["authorize"]?.elicitationResult?.action, .accept)
   }
 
   func testMRTRRejectsLimitBreachesAndRepeatedRoundsBeforeUnboundedRetry() async throws {
@@ -329,12 +339,12 @@ final class MCPProtocolConceptTests: XCTestCase {
         url: "https://example.com/authorize"
       )
     )
-    let provider = ConceptElicitationProvider(
+    let provider = ConceptInputProvider(
       response: try MCPElicitationResult(action: .accept)
     )
     let perRoundViolation = try MCPCallToolResult(
       resultType: .inputRequired,
-      inputRequests: ["one": request, "two": request],
+      inputRequests: ["one": .elicitation(request), "two": .elicitation(request)],
       requestState: "too-many"
     )
     let perRoundTranscript = ConceptTranscript(frames: [
@@ -374,7 +384,7 @@ final class MCPProtocolConceptTests: XCTestCase {
 
     let repeatedRound = try MCPCallToolResult(
       resultType: .inputRequired,
-      inputRequests: ["authorize": request],
+      inputRequests: ["authorize": .elicitation(request)],
       requestState: "same-round"
     )
     let repeatedTranscript = ConceptTranscript(frames: [

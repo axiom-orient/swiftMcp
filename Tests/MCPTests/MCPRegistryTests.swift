@@ -17,7 +17,8 @@ final class MCPRegistryTests: XCTestCase {
     XCTAssertEqual(
       Set(registry.serverNotificationMethods.map(\.name)),
       [
-        "notifications/progress", "notifications/subscriptions/acknowledged",
+        "notifications/progress", "notifications/message",
+        "notifications/subscriptions/acknowledged",
         "notifications/tools/list_changed", "notifications/prompts/list_changed",
         "notifications/resources/list_changed", "notifications/resources/updated",
         "notifications/cancelled",
@@ -47,9 +48,10 @@ final class MCPRegistryTests: XCTestCase {
       XCTAssertEqual(error as? MCPRegistryError, .standardMethodCollision("tools/list"))
     }
 
-    let notNamespaced = try MCPMethodDescriptor(
-      name: "vendor/action", direction: .clientToServerRequest, isExtension: true)
-    XCTAssertThrowsError(try MCPMethodRegistry(extensionMethods: [notNamespaced])) { error in
+    XCTAssertThrowsError(
+      try MCPMethodDescriptor(
+        name: "vendor/action", direction: .clientToServerRequest, isExtension: true)
+    ) { error in
       XCTAssertEqual(error as? MCPRegistryError, .invalidMethodName("vendor/action"))
     }
 
@@ -62,6 +64,19 @@ final class MCPRegistryTests: XCTestCase {
       )
     ) { error in
       XCTAssertEqual(error as? MCPRegistryError, .invalidExtensionResultType)
+    }
+  }
+
+  func testVendorExtensionCannotIntroduceCoreShapedMethod() {
+    XCTAssertThrowsError(
+      try MCPMethodDescriptor(
+        name: "roots/list",
+        direction: .clientToServerRequest,
+        isExtension: true,
+        extensionIdentifier: "com.example/compat"
+      )
+    ) { error in
+      XCTAssertEqual(error as? MCPRegistryError, .invalidMethodName("roots/list"))
     }
   }
 

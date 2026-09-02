@@ -1,8 +1,11 @@
 import Foundation
 import MCPHTTPClient
 import MCPStdioClient
-import MCPTasks
 import XCTest
+
+#if os(macOS)
+  import MCPXcode
+#endif
 
 final class MCPProductImportTests: XCTestCase {
   func testProductImportsExposeTypesUsedByTheirPublicAPIs() throws {
@@ -12,6 +15,8 @@ final class MCPProductImportTests: XCTestCase {
       additionalHeaders: headers
     )
     _ = MCPStdioLimits.default
-    _ = try MCPTasksExtension.clientCapabilities()
+    #if os(macOS)
+      _ = MCPXcodeProtocolRevision.preferred
+    #endif
   }
 }

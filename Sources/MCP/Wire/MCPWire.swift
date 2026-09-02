@@ -223,7 +223,7 @@ public enum MCPClientError: Error, Sendable, CustomStringConvertible {
     case .timeout: "Request timed out"
     case .protocolViolation(let message): "Protocol violation: \(message)"
     case .inputRequiredButNoProvider:
-      "Server requires input but no elicitation provider is configured"
+      "Server requires input but no input provider is configured"
     case .maximumRoundTripsExceeded(let value): "Multi-round-trip limit exceeded (\(value))"
     }
   }

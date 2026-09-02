@@ -395,6 +395,40 @@ final class MCPRuntimeTests: XCTestCase {
     XCTAssertFalse(server.capabilities.resources)
   }
 
+  func testBuilderEnforcesRequiredServerCapabilityForExtensionHandlers() throws {
+    let descriptor = try MCPMethodDescriptor(
+      name: "com.example/tools/action",
+      direction: .clientToServerRequest,
+      requiredServerCapability: .tools,
+      isExtension: true
+    )
+    let method = MCPMethod<MCPListToolsParams, MCPListToolsResult>(descriptor)
+    var incomplete = try MCPServerBuilder(implementation: implementation("missing-capability"))
+    try incomplete.register(method) { _, _ in MCPListToolsResult(tools: []) }
+
+    XCTAssertThrowsError(try incomplete.build()) { error in
+      XCTAssertEqual(
+        error as? MCPServerBuildError,
+        .incompleteFeature(
+          "com.example/tools/action requires server capability tools"
+        )
+      )
+    }
+
+    var matching = try MCPServerBuilder(implementation: implementation("matching-capability"))
+    let tool = try tool()
+    matching.setToolResolver { name, _ in name == tool.name ? tool : nil }
+    try matching.register(MCPStandardMethods.listTools) { _, _ in
+      MCPListToolsResult(tools: [tool])
+    }
+    try matching.register(MCPStandardMethods.callTool) { _, _ in
+      try MCPCallToolResult(content: [])
+    }
+    try matching.register(method) { _, _ in MCPListToolsResult(tools: []) }
+    let server = try matching.build()
+    XCTAssertTrue(server.capabilities.tools)
+  }
+
   func testInMemoryDiscoveryToolCallProgressAndRequestLocalAuthorization() async throws {
     let contexts = RuntimeCapture<MCPRequestContext>()
     let server = try makeToolServer(contexts: contexts, progress: true)

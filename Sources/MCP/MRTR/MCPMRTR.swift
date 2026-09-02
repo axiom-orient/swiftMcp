@@ -12,11 +12,11 @@ public struct MCPMRTRContext: Sendable, Hashable {
   }
 }
 
-public protocol MCPElicitationProvider: Sendable {
-  func elicit(
-    _ request: MCPElicitationRequest,
+public protocol MCPInputProvider: Sendable {
+  func resolve(
+    _ request: MCPInputRequest,
     context: MCPMRTRContext
-  ) async throws -> MCPElicitationResult
+  ) async throws -> MCPInputResponse
 }
 
 public struct MCPMRTRPolicy: Sendable, Hashable {
@@ -162,20 +162,20 @@ public enum MCPMRTRReducer {
 
 private protocol MCPMRTRRequestParameters: MCPJSONModel {
   func retrying(
-    inputResponses: [String: MCPElicitationResult],
+    inputResponses: [String: MCPInputResponse],
     requestState: String?
   ) throws -> Self
 }
 
 private protocol MCPMRTRResponse: MCPJSONModel {
   var resultType: MCPResultType { get }
-  var inputRequests: [String: MCPElicitationRequest] { get }
+  var inputRequests: [String: MCPInputRequest] { get }
   var requestState: String? { get }
 }
 
 extension MCPCallToolParams: MCPMRTRRequestParameters {
   fileprivate func retrying(
-    inputResponses: [String: MCPElicitationResult], requestState: String?
+    inputResponses: [String: MCPInputResponse], requestState: String?
   ) throws -> Self {
     try Self(
       name: name,
@@ -188,7 +188,7 @@ extension MCPCallToolParams: MCPMRTRRequestParameters {
 
 extension MCPGetPromptParams: MCPMRTRRequestParameters {
   fileprivate func retrying(
-    inputResponses: [String: MCPElicitationResult], requestState: String?
+    inputResponses: [String: MCPInputResponse], requestState: String?
   ) throws -> Self {
     try Self(
       name: name,
@@ -201,7 +201,7 @@ extension MCPGetPromptParams: MCPMRTRRequestParameters {
 
 extension MCPReadResourceParams: MCPMRTRRequestParameters {
   fileprivate func retrying(
-    inputResponses: [String: MCPElicitationResult], requestState: String?
+    inputResponses: [String: MCPInputResponse], requestState: String?
   ) throws -> Self {
     try Self(uri: uri, inputResponses: inputResponses, requestState: requestState)
   }
@@ -214,9 +214,10 @@ extension MCPReadResourceResult: MCPMRTRResponse {}
 extension MCPClient {
   public func callToolResolvingInput(
     _ params: MCPCallToolParams,
-    provider: any MCPElicitationProvider,
+    provider: any MCPInputProvider,
     policy: MCPMRTRPolicy = .default,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPCallToolResult {
     try await resolveMRTR(
@@ -225,15 +226,17 @@ extension MCPClient {
       provider: provider,
       policy: policy,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func getPromptResolvingInput(
     _ params: MCPGetPromptParams,
-    provider: any MCPElicitationProvider,
+    provider: any MCPInputProvider,
     policy: MCPMRTRPolicy = .default,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPGetPromptResult {
     try await resolveMRTR(
@@ -242,15 +245,17 @@ extension MCPClient {
       provider: provider,
       policy: policy,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func readResourceResolvingInput(
     _ params: MCPReadResourceParams,
-    provider: any MCPElicitationProvider,
+    provider: any MCPInputProvider,
     policy: MCPMRTRPolicy = .default,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPReadResourceResult {
     try await resolveMRTR(
@@ -259,6 +264,7 @@ extension MCPClient {
       provider: provider,
       policy: policy,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
@@ -266,9 +272,10 @@ extension MCPClient {
   private func resolveMRTR<Params: MCPMRTRRequestParameters, Result: MCPMRTRResponse>(
     _ method: MCPMethod<Params, Result>,
     initialParams: Params,
-    provider: any MCPElicitationProvider,
+    provider: any MCPInputProvider,
     policy: MCPMRTRPolicy,
     progress: MCPProgressHandler?,
+    logging: MCPClientLogging?,
     metadataExtensions: [String: MCPJSONValue]
   ) async throws -> Result {
     guard method.descriptor.allowsMRTR else {
@@ -284,6 +291,7 @@ extension MCPClient {
         method,
         params: params,
         progress: progress,
+        logging: logging,
         metadataExtensions: metadataExtensions
       )
 
@@ -324,7 +332,7 @@ extension MCPClient {
         )
         state = transition.0
 
-        var responses: [String: MCPElicitationResult] = [:]
+        var responses: [String: MCPInputResponse] = [:]
         if keys.isEmpty {
           if policy.retryDelay > .zero {
             try await ContinuousClock().sleep(for: policy.retryDelay)
@@ -335,7 +343,7 @@ extension MCPClient {
             guard let request = result.inputRequests[key] else {
               throw MCPClientError.protocolViolation("MRTR input request key disappeared")
             }
-            let response = try await provider.elicit(
+            let response = try await provider.resolve(
               request,
               context: MCPMRTRContext(
                 method: method.descriptor.name,
@@ -343,7 +351,7 @@ extension MCPClient {
                 round: round
               )
             )
-            try request.params.validate(result: response)
+            try request.validateResponseKind(response)
             responses[key] = response
           }
           state = try MCPMRTRReducer.reduce(

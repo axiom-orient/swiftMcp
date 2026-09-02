@@ -7,22 +7,25 @@ commit과 [그 commit의 schema](https://github.com/modelcontextprotocol/modelco
 
 이 SDK는 타입이 있는 Swift client와 server를 위한 엄격한 stateless MCP 프로필을 구현합니다. 외부
 SwiftPM 의존성은 없습니다.
+Canonical 제품 정체성은 2026 stateless `MCP` runtime + transport + sealed `MCPXcode`
+interoperability edge입니다.
 
 English: [README.md](README.md)
 
 ## 범위
 
-- MCP `2026-07-28`만 지원합니다. 모든 요청에는 자체 protocol metadata와 capabilities가 포함됩니다.
+- `MCP` 코어는 MCP `2026-07-28`만 지원합니다. 모든 요청에는 자체 protocol metadata와 capabilities가 포함됩니다.
 - HTTP 연결과 stdio 프로세스는 전송 수단일 뿐 MCP session이 아닙니다.
 - 제공 범위는 discovery, tools, prompts, resources, completion, progress, cancellation,
-  subscriptions, MRTR, cache 계약, 범위가 제한된 JSON Schema 검증, 선택적인 `MCPTasks` 제품입니다.
-- `MCPTasks`는 Stable 2026-07-28 Tasks 확장의 요청별 capability·authorization 검사를 구현합니다.
-  호스트 소유 durable store가 필수이며 production in-memory fallback은 없습니다. 자세한 내용은
-  [Documentation/MCPTasks.md](Documentation/MCPTasks.md)를 참고하세요.
-- `initialize`, session header, legacy transport, migration, downgrade 동작, JSON-RPC batch,
-  server-originated request, 자동 OAuth 재시도는 제공하지 않습니다.
-- `MCPOAuth`는 선택 기능입니다. HTTP authorization, TLS 종료, 브라우저 UI, callback, credential
-  저장, 재시도 정책은 호스트 애플리케이션이 맡습니다.
+  subscriptions, typed MRTR 입력(`elicitation`, deprecated `sampling`, deprecated `roots`),
+  request-scoped logging, cache 계약, 범위가 제한된 로컬 JSON Schema 검증입니다.
+  MRTR의 `requestState`는 opaque 값으로 보존하며 wire shape 검증과 application content policy를
+  분리합니다. 자세한 내용은 [Documentation/MRTR.md](Documentation/MRTR.md)를 참고하세요.
+- modern core에는 `initialize`, session header, legacy transport, migration, downgrade 동작,
+  JSON-RPC batch, server-originated request, 자동 OAuth 재시도가 없습니다.
+- `MCPXcode`만 유일한 격리된 호환 경계입니다. macOS에서 Apple `xcrun mcpbridge`가 실제로
+  요구하는 legacy handshake와 tool RPC만 구현하며 `MCPClient`와 2026 core의 의미를 바꾸지 않습니다.
+  자세한 내용은 [Documentation/XcodeMCP.md](Documentation/XcodeMCP.md)를 참고하세요.
 
 기본 validator는 local dynamic reference를 포함한 self-contained JSON Schema 2020-12와 draft-07
 프로필을 처리합니다. 지원하지 않는 dialect와 해석할 수 없는 외부 reference는 fail-closed로
@@ -61,14 +64,12 @@ product를 지정할 때는 `swiftmcp` 패키지 식별자를 사용합니다.
 | 제품 | 용도 |
 | --- | --- |
 | `MCP` | protocol model, JSON-RPC wire codec, stateless runtime, schema validation, MRTR, subscriptions, cache 계약 |
-| `MCPTasks` | Stable 2026-07-28 Tasks 확장 model, client helper, durable-store 기반 server lifecycle |
 | `MCPHTTPClient` / `MCPHTTPServer` | 요청별 HTTP POST와 JSON 또는 SSE 응답 |
 | `MCPStdioClient` / `MCPStdioServer` | 자식 프로세스 stdio 전송과 server runner |
-| `MCPOAuth` | 선택적인 OAuth client discovery와 token 흐름 |
+| `MCPXcode` | Apple `xcrun mcpbridge` 전용 macOS adapter. legacy lifecycle은 2026 core 밖에 격리 |
 
-`MCPHTTPShared`, `MCPStdioShared`, `MCPPlatformCrypto`는 구현 대상입니다.
-`mcp-conformance-client`, `mcp-conformance-server`, `mcp-json-schema-corpus`는 샘플 앱이 아니라
-검증 fixture입니다.
+`MCPHTTPShared`, `MCPStdioShared`는 구현 대상입니다.
+`mcp-conformance-client`, `mcp-conformance-server`는 샘플 앱이 아니라 로컬 검증 fixture입니다.
 
 ## 샘플
 
@@ -142,8 +143,39 @@ HTTP에서는 `MCPHTTPClientConfiguration(endpoint:)`으로 `MCPHTTPClientTransp
 
 `MCPHTTPServer`는 기본적으로 loopback에 바인딩합니다. 외부 주소에 바인딩하려면 명시적인
 authorization verifier가 필요합니다. 공개 배포에서는 신뢰할 수 있는 TLS terminator 뒤에 두고,
-Origin 정책을 구성하세요. OAuth를 쓸 때 Protected Resource Metadata는 주변 HTTP 애플리케이션이
-제공해야 합니다.
+Origin 정책을 구성하세요.
+
+
+## Xcode MCP
+
+Xcode는 `xcrun mcpbridge`로 실행되는 stdio MCP server를 외부 agent에 제공합니다. Xcode peer에는
+strict 2026 `MCPClient`가 아니라 `MCPXcodeClient`를 사용합니다.
+
+```swift
+#if os(macOS)
+import MCP
+import MCPXcode
+
+let configuration = try MCPXcodeConfiguration(
+  implementation: try MCPImplementation(name: "my-agent", version: "1.0.0")
+)
+let xcode = MCPXcodeClient(configuration: configuration)
+let connection = try await xcode.connect()
+let tools = try await xcode.listTools()
+let result = try await xcode.callTool(name: "XcodeListWindows")
+print(connection.protocolRevision, tools.tools.count, result)
+await xcode.close()
+#endif
+```
+
+`MCPXcode`는 Xcode에서 실제 관찰된 `2024-11-05`, `2025-03-26`, `2025-06-18`만 qualified
+revision으로 허용합니다. 기본값은 `2025-06-18`이며 구형 Xcode는 더 오래된 qualified revision을
+명시적으로 pin할 수 있습니다. 정수 JSON-RPC request ID를 사용하고 surface도 initialization과
+`tools/list` / `tools/call`로 제한합니다. 자동 legacy downgrade나 범용 compatibility runtime은 없습니다.
+
+실제 Xcode qualification은 명시적으로만 실행합니다. `Documentation/XcodeQualification.md`의
+절차는 production client를 test-only 투명 proxy를 통해 실행해 raw `mcpbridge` transcript를
+보존하며, 이를 위해 범용 legacy runtime을 추가하지 않습니다.
 
 ## 검증
 
@@ -160,20 +192,10 @@ swift test
 SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 ```
 
-`verify.sh`는 엄격한 형식 검사, warnings-as-errors Debug·Release build, 전체 test, 고정된 JSON Schema
-2020-12 corpus, stdio conformance smoke, 외부 SDK conformance를 실행합니다. 별도의 SwiftPM·corpus
-디렉터리를 사용하며,
-저장소의 `.build`를 읽거나 지우거나 바꾸지 않습니다. corpus runner는 self-contained 프로필을
-검증하고 외부 reference나 지원하지 않는 dialect는 명시적으로 skip합니다. 다운로드를 피하려면
-`MCP_JSON_SCHEMA_CORPUS_PATH`에 고정 commit [`fb7372e`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/commit/fb7372e8763a1417bddc65fa4c911b3e79b57b65)의
-로컬 checkout 경로를 지정하세요.
-
-외부 SDK conformance 게이트는 고정된 공식 Python SDK revision으로 양방향을 검증합니다:
-`mcp-conformance-client --http`가 stateless HTTP 참조 서버를 통해 strict 시퀀스를 통과하는지
-확인하고, 반대로 SDK 자체 클라이언트가 이 저장소의 HTTP conformance 서버를 호출합니다.
-이 저장소의 와이어 형식이 자기 자신뿐 아니라 생태계 참조 구현과 일치함을 교차 검증합니다.
-SDK 환경은 격리된 venv에 구성되며 `MCP_PYTHON_SDK_VENV`에 미리 만든 venv 경로를 지정하면
-다운로드 없이 재사용할 수 있습니다.
+`verify.sh`는 엄격한 형식 검사, warnings-as-errors Debug·Release build, 전체 로컬 test
+(JSON Schema 테스트 포함), 로컬 stdio conformance smoke를 실행합니다. 별도의 SwiftPM scratch
+디렉터리를 사용하며 저장소의 `.build`를 읽거나 지우거나 바꾸지 않습니다. 외부 corpus를
+다운로드하거나 다른 SDK를 호출하지 않습니다.
 
 `Scripts/clean.sh`도 저장소 내부의 verification state만 정리하며 `.build`와 `.swiftpm`은 그대로 둡니다.
 `.build`, `.swiftpm`, `.verification`, `Artifacts`, 생성된 ZIP 파일, Finder metadata는 커밋하지
@@ -186,8 +208,8 @@ SDK 환경은 격리된 venv에 구성되며 `MCP_PYTHON_SDK_VENV`에 미리 만
 2. 배포할 commit에서 `SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh`를 실행합니다.
 3. `git status --short`가 비어 있는지, `git remote get-url origin`이 올바른 GitHub 저장소인지
    확인합니다.
-4. gate가 사용한 MCP와 JSON Schema corpus revision을 확인한 뒤 새 semantic version tag를 하나 만들고
-   push합니다. 이미 만든 tag를 다른 commit으로 옮기지 마세요.
+4. 릴리스할 때 새 semantic version tag를 하나 만들고 push합니다. 이미 만든 tag를 다른 commit으로
+   옮기지 마세요.
 5. 태그를 만든 commit에서 release note를 작성하고, 작업 공간 ZIP 대신 GitHub가 생성한 source archive를
    사용합니다.
 

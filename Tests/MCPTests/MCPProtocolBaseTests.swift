@@ -127,14 +127,25 @@ final class MCPProtocolBaseTests: XCTestCase {
 
   func testCapabilitiesPreserveDeprecatedAndFutureEntries() throws {
     let clientJSON: MCPJSONValue = .object([
-      "roots": .object([:]),
-      "sampling": .object(["tools": .object([:])]),
+      "elicitation": .object([
+        "form": .object(["ui": .string("native")]),
+        "url": .object(["callback": .bool(true)]),
+      ]),
+      "roots": .object(["scope": .string("workspace")]),
+      "sampling": .object([
+        "context": .object(["mode": .string("server")]),
+        "tools": .object(["parallel": .bool(true)]),
+      ]),
       "com.example/future": .object(["enabled": .bool(true)]),
     ])
     XCTAssertEqual(try MCPClientCapabilities(json: clientJSON).json, clientJSON)
 
     let serverJSON: MCPJSONValue = .object([
-      "logging": .object([:]),
+      "tools": .object(["listChanged": .bool(true), "vendor": .string("tool-setting")]),
+      "prompts": .object(["listChanged": .bool(false), "vendor": .string("prompt-setting")]),
+      "resources": .object(["subscribe": .bool(true), "vendor": .string("resource-setting")]),
+      "completions": .object(["vendor": .string("completion-setting")]),
+      "logging": .object(["format": .string("json")]),
       "com.example/future": .object(["enabled": .bool(true)]),
     ])
     XCTAssertEqual(try MCPServerCapabilities(json: serverJSON).json, serverJSON)
@@ -147,6 +158,8 @@ final class MCPProtocolBaseTests: XCTestCase {
       try MCPClientCapabilities(additionalCapabilities: ["sampling": .object([:])]))
     XCTAssertThrowsError(
       try MCPServerCapabilities(additionalCapabilities: ["logging": .object([:])]))
+    XCTAssertThrowsError(
+      try MCPServerCapabilities(additionalCapabilities: ["completions": .object([:])]))
 
     let experimental: [String: MCPJSONValue] = ["com.example/feature": .object(["v": .integer(1)])]
     XCTAssertEqual(
@@ -160,6 +173,20 @@ final class MCPProtocolBaseTests: XCTestCase {
     XCTAssertThrowsError(
       try MCPClientCapabilities(json: .object(["experimental": .object(["bad": .bool(true)])]))
     )
+  }
+
+  func testRequestScopedLoggingMessagePreservesNotificationMetadata() throws {
+    let metadata = try MCPNotificationMetadata(
+      extensions: ["com.example/log": .string("request-1")]
+    )
+    let message = try MCPLoggingMessageParams(
+      level: .warning,
+      logger: "compiler",
+      data: .object(["message": .string("warning")]),
+      metadata: metadata
+    )
+
+    XCTAssertEqual(try MCPLoggingMessageParams(json: message.json), message)
   }
 
   func testCapabilityExtensionIdentifiersUseMetadataGrammarAndRequirePrefix() throws {

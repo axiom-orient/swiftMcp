@@ -3,13 +3,13 @@ import MCP
 import MCPHTTPClient
 import MCPStdioClient
 
-/// Cross-implementation conformance fixture.
+/// Local transport-agnostic conformance fixture.
 ///
 /// The assertion sequence is deliberately transport-agnostic and implementation-tolerant:
 /// it exercises the strict stateless surface (discovery, listing, tool call, and a negative
 /// unknown-tool path) while leaving room for legitimate peer choices such as reporting an
-/// unknown tool as an RPC error or as an `isError` result. It must pass unchanged against
-/// this repository's own fixture server and against an external reference SDK server.
+/// unknown tool as an RPC error or as an `isError` result. It runs against this repository's
+/// own fixture server so the local client and transport remain exercised together.
 @main
 enum MCPConformanceClient {
   static func main() async throws {

@@ -69,6 +69,7 @@ private actor MCPStdioClientRuntime {
   private struct Pending: Sendable {
     let method: String
     let progressToken: MCPProgressToken?
+    let logLevel: MCPLoggingLevel?
     let continuation: AsyncThrowingStream<MCPWireMessage, Error>.Continuation
   }
 
@@ -112,11 +113,18 @@ private actor MCPStdioClientRuntime {
       throw MCPStdioError.processNotRunning
     }
     let metadata = try MCPRequestMetadata.extract(from: request.params)
+    if metadata.logLevel != nil,
+      pending.values.contains(where: { $0.logLevel != nil })
+    {
+      throw MCPStdioError.io(
+        "concurrent log-enabled requests are ambiguous on MCP 2026 stdio")
+    }
     let pair = AsyncThrowingStream<MCPWireMessage, Error>.makeStream(
       bufferingPolicy: .bufferingNewest(4_096))
     pending[request.id] = Pending(
       method: request.method,
       progressToken: metadata.progressToken,
+      logLevel: metadata.logLevel,
       continuation: pair.continuation
     )
     do {
@@ -351,6 +359,18 @@ private actor MCPStdioClientRuntime {
           "server may only cancel subscriptions/listen on stdio")
       }
       return params.requestID
+    case "notifications/message":
+      _ = try MCPMethodRegistry.standard.require(
+        notification.method,
+        direction: .serverToClientNotification
+      )
+      _ = try MCPLoggingMessageParams(json: .object(notification.params))
+      let candidates = pending.filter { $0.value.logLevel != nil }
+      guard candidates.count == 1, let requestID = candidates.first?.key else {
+        throw MCPStdioError.unexpectedMessage(
+          "request-scoped logging cannot be correlated to exactly one active request")
+      }
+      return requestID
     default:
       guard let metadataValue = notification.params["_meta"] else {
         throw MCPStdioError.unexpectedMessage(

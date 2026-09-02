@@ -278,7 +278,7 @@ final class MCPModelTests: XCTestCase {
       ))
     let pending = try MCPCallToolResult(
       resultType: .inputRequired,
-      inputRequests: ["auth": input],
+      inputRequests: ["auth": .elicitation(input)],
       requestState: "state-1"
     )
     try assertRoundTrip(pending)
@@ -287,8 +287,54 @@ final class MCPModelTests: XCTestCase {
       try MCPCallToolResult(resultType: .inputRequired)
     )
     XCTAssertThrowsError(
-      try MCPCallToolResult(content: [], resultType: .complete, inputRequests: ["x": input])
+      try MCPCallToolResult(
+        content: [], resultType: .complete, inputRequests: ["x": .elicitation(input)])
     )
+  }
+
+  func testMRTROpaqueStateAndArbitraryKeysRoundTripWithoutExtraWirePolicy() throws {
+    let rootsRequest = try MCPListRootsRequest()
+    let pending = try MCPCallToolResult(
+      resultType: .inputRequired,
+      inputRequests: ["": .roots(rootsRequest)],
+      requestState: ""
+    )
+    try assertRoundTrip(pending)
+    XCTAssertEqual(pending.requestState, "")
+    XCTAssertNotNil(pending.inputRequests[""])
+
+    let retry = try MCPCallToolParams(
+      name: "resume",
+      inputResponses: ["": .roots(try MCPListRootsResult(roots: []))],
+      requestState: ""
+    )
+    try assertRoundTrip(retry)
+    XCTAssertEqual(retry.requestState, "")
+    XCTAssertNotNil(retry.inputResponses[""])
+  }
+
+  func testMRTRValidatesResponseKindButLeavesElicitationContentPolicyExplicit() throws {
+    let params = try MCPElicitationParams(
+      mode: .form,
+      message: "Name",
+      requestedSchema: [
+        "type": .string("object"),
+        "properties": .object([
+          "name": .object(["type": .string("string")])
+        ]),
+        "required": .array([.string("name")]),
+      ]
+    )
+    let request = MCPElicitationRequest(params: params)
+    let response = try MCPElicitationResult(
+      action: .accept,
+      content: ["name": .number(MCPJSONNumber(42))]
+    )
+
+    XCTAssertNoThrow(
+      try MCPInputRequest.elicitation(request).validateResponseKind(.elicitation(response))
+    )
+    XCTAssertThrowsError(try params.validate(result: response))
   }
 
   func testPromptResourceAndCompletionModelsRoundTrip() throws {

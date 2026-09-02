@@ -1,6 +1,5 @@
 import MCPHTTPClient
 import MCPHTTPServer
-import MCPOAuth
 import MCPStdioClient
 import MCPStdioServer
 import XCTest
@@ -19,23 +18,14 @@ private actor IntegrationCapture<Value: Sendable> {
   }
 }
 
-private struct OAuthChallengeTransport: MCPClientTransport {
-  let endpointIdentity = "https://mcp.example/mcp"
-
-  func open(_ request: MCPWireRequest) async throws -> MCPClientExchange {
-    _ = request
-    let stream = AsyncThrowingStream<MCPWireMessage, Error> { continuation in
-      continuation.finish(
-        throwing: MCPHTTPUnauthorizedResponse(
-          wwwAuthenticate: "Bearer resource_metadata=\"https://auth.example/metadata\"",
-          body: "access denied"
-        ))
-    }
-    return MCPClientExchange(frames: stream, cancel: { _ in })
+extension MCPInputResponse {
+  fileprivate var elicitationResult: MCPElicitationResult? {
+    guard case .elicitation(let result) = self else { return nil }
+    return result
   }
 }
 
-private actor IntegrationElicitationProvider: MCPElicitationProvider {
+private actor IntegrationInputProvider: MCPInputProvider {
   private var contexts: [MCPMRTRContext] = []
   private let response: MCPElicitationResult
 
@@ -43,13 +33,15 @@ private actor IntegrationElicitationProvider: MCPElicitationProvider {
     self.response = response
   }
 
-  func elicit(
-    _ request: MCPElicitationRequest,
+  func resolve(
+    _ request: MCPInputRequest,
     context: MCPMRTRContext
-  ) async throws -> MCPElicitationResult {
-    _ = request
+  ) async throws -> MCPInputResponse {
+    guard case .elicitation = request else {
+      throw MCPClientError.protocolViolation("integration provider expected elicitation")
+    }
     contexts.append(context)
-    return response
+    return .elicitation(response)
   }
 
   func observedContexts() -> [MCPMRTRContext] {
@@ -57,13 +49,13 @@ private actor IntegrationElicitationProvider: MCPElicitationProvider {
   }
 }
 
-private actor FailingElicitationProvider: MCPElicitationProvider {
+private actor FailingInputProvider: MCPInputProvider {
   private var callCount = 0
 
-  func elicit(
-    _ request: MCPElicitationRequest,
+  func resolve(
+    _ request: MCPInputRequest,
     context: MCPMRTRContext
-  ) async throws -> MCPElicitationResult {
+  ) async throws -> MCPInputResponse {
     _ = request
     _ = context
     callCount += 1
@@ -94,39 +86,6 @@ final class MCPIntegrationTests: XCTestCase {
       ),
       startingRequestID: startingRequestID
     )
-  }
-
-  func testHighLevelClientPreservesHTTPUnauthorizedResponseForOAuthChallenge() async throws {
-    let client = try MCPClient(
-      transport: OAuthChallengeTransport(),
-      configuration: MCPClientConfiguration(
-        implementation: implementation("oauth-challenge-client"),
-        capabilities: MCPClientCapabilities(),
-        requestTimeout: .seconds(2)
-      )
-    )
-
-    do {
-      _ = try await client.discover()
-      XCTFail("the unauthorized transport response must be surfaced")
-    } catch let error as MCPClientError {
-      let challenge = try MCPOAuthChallenge(clientError: error)
-      XCTAssertEqual(challenge.resourceMetadataURL?.absoluteString, "https://auth.example/metadata")
-      XCTAssertEqual(challenge.scopes, [])
-    }
-
-    XCTAssertThrowsError(
-      try MCPOAuthChallenge(
-        unauthorizedResponse: MCPHTTPUnauthorizedResponse(
-          wwwAuthenticate: nil,
-          body: "access denied"
-        ))
-    ) { error in
-      XCTAssertEqual(
-        error as? MCPOAuthError,
-        .invalidMetadata("HTTP 401 response is missing WWW-Authenticate")
-      )
-    }
   }
 
   func testAllStandardFeatureFamiliesShareOneStatelessRuntime() async throws {
@@ -301,11 +260,11 @@ final class MCPIntegrationTests: XCTestCase {
       guard let response = params.inputResponses["name"] else {
         return try MCPCallToolResult(
           resultType: .inputRequired,
-          inputRequests: ["name": inputRequest],
+          inputRequests: ["name": .elicitation(inputRequest)],
           requestState: "welcome-v1"
         )
       }
-      guard response.content?["name"] == .string("Ada"),
+      guard response.elicitationResult?.content?["name"] == .string("Ada"),
         params.arguments == ["language": .string("ko")],
         params.requestState == "welcome-v1"
       else {
@@ -322,7 +281,7 @@ final class MCPIntegrationTests: XCTestCase {
       elicitation: try MCPElicitationCapabilities(form: true, url: false),
       startingRequestID: 10
     )
-    let provider = IntegrationElicitationProvider(
+    let provider = IntegrationInputProvider(
       response: try MCPElicitationResult(
         action: .accept,
         content: ["name": .string("Ada")]
@@ -368,7 +327,7 @@ final class MCPIntegrationTests: XCTestCase {
       server: retryBuilder.build(),
       elicitation: try MCPElicitationCapabilities(form: true, url: false)
     )
-    let unusedProvider = FailingElicitationProvider()
+    let unusedProvider = FailingInputProvider()
     let completed = try await retryClient.callToolResolvingInput(
       try MCPCallToolParams(name: "poll", arguments: ["job": .string("42")]),
       provider: unusedProvider,
@@ -402,7 +361,7 @@ final class MCPIntegrationTests: XCTestCase {
       await repeatedCalls.append(params)
       return try MCPCallToolResult(
         resultType: .inputRequired,
-        inputRequests: ["value": repeatedInput],
+        inputRequests: ["value": .elicitation(repeatedInput)],
         requestState: "same"
       )
     }
@@ -410,7 +369,7 @@ final class MCPIntegrationTests: XCTestCase {
       server: repeatedBuilder.build(),
       elicitation: try MCPElicitationCapabilities(form: true, url: false)
     )
-    let repeatedProvider = IntegrationElicitationProvider(
+    let repeatedProvider = IntegrationInputProvider(
       response: try MCPElicitationResult(
         action: .accept,
         content: ["value": .string("x")]
@@ -434,7 +393,10 @@ final class MCPIntegrationTests: XCTestCase {
     XCTAssertEqual(calls.count, 5)
     XCTAssertNil(calls[0].requestState)
     XCTAssertTrue(calls.dropFirst().allSatisfy { $0.requestState == "same" })
-    XCTAssertTrue(calls.dropFirst().allSatisfy { $0.inputResponses["value"]?.action == .accept })
+    XCTAssertTrue(
+      calls.dropFirst().allSatisfy {
+        $0.inputResponses["value"]?.elicitationResult?.action == .accept
+      })
     let contexts = await repeatedProvider.observedContexts()
     XCTAssertEqual(
       contexts,

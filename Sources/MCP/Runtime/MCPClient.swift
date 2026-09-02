@@ -1,6 +1,17 @@
 import Foundation
 
 public typealias MCPProgressHandler = @Sendable (MCPProgressParams) async throws -> Void
+public typealias MCPLoggingHandler = @Sendable (MCPLoggingMessageParams) async throws -> Void
+
+public struct MCPClientLogging: Sendable {
+  public let level: MCPLoggingLevel
+  public let handler: MCPLoggingHandler
+
+  public init(level: MCPLoggingLevel, handler: @escaping MCPLoggingHandler) {
+    self.level = level
+    self.handler = handler
+  }
+}
 
 public enum MCPClientSubscriptionEvent: Sendable, Equatable {
   case acknowledged(MCPSubscriptionFilter)
@@ -452,6 +463,7 @@ public struct MCPClient: Sendable {
     _ method: MCPMethod<Params, Result>,
     params: Params,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> Result {
     let rawParams = method.encodeParams(params)
@@ -466,6 +478,7 @@ public struct MCPClient: Sendable {
       descriptor: method.descriptor,
       params: rawParams,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
     if method.descriptor.name == MCPStandardMethods.listTools.descriptor.name {
@@ -640,22 +653,26 @@ public struct MCPClient: Sendable {
   }
 
   public func discover(
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPDiscoverResult {
     try await call(
       MCPStandardMethods.discover,
       params: MCPDiscoverParams(),
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func listTools(
     cursor: String? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPListToolsResult {
     try await call(
       MCPStandardMethods.listTools,
       params: MCPListToolsParams(cursor: cursor),
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
@@ -663,23 +680,27 @@ public struct MCPClient: Sendable {
   public func callTool(
     _ params: MCPCallToolParams,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPCallToolResult {
     try await call(
       MCPStandardMethods.callTool,
       params: params,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func listPrompts(
     cursor: String? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPListPromptsResult {
     try await call(
       MCPStandardMethods.listPrompts,
       params: MCPListPromptsParams(cursor: cursor),
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
@@ -687,34 +708,40 @@ public struct MCPClient: Sendable {
   public func getPrompt(
     _ params: MCPGetPromptParams,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPGetPromptResult {
     try await call(
       MCPStandardMethods.getPrompt,
       params: params,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func listResources(
     cursor: String? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPListResourcesResult {
     try await call(
       MCPStandardMethods.listResources,
       params: MCPListResourcesParams(cursor: cursor),
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func listResourceTemplates(
     cursor: String? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPListResourceTemplatesResult {
     try await call(
       MCPStandardMethods.listResourceTemplates,
       params: MCPListResourceTemplatesParams(cursor: cursor),
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
@@ -722,23 +749,27 @@ public struct MCPClient: Sendable {
   public func readResource(
     _ params: MCPReadResourceParams,
     progress: MCPProgressHandler? = nil,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPReadResourceResult {
     try await call(
       MCPStandardMethods.readResource,
       params: params,
       progress: progress,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
 
   public func complete(
     _ params: MCPCompleteParams,
+    logging: MCPClientLogging? = nil,
     metadataExtensions: [String: MCPJSONValue] = [:]
   ) async throws -> MCPCompleteResult {
     try await call(
       MCPStandardMethods.complete,
       params: params,
+      logging: logging,
       metadataExtensions: metadataExtensions
     )
   }
@@ -868,6 +899,7 @@ public struct MCPClient: Sendable {
     descriptor: MCPMethodDescriptor,
     params: MCPJSONValue,
     progress: MCPProgressHandler?,
+    logging: MCPClientLogging?,
     metadataExtensions: [String: MCPJSONValue]
   ) async throws -> [String: MCPJSONValue] {
     let registered = try registry.require(descriptor.name)
@@ -879,11 +911,16 @@ public struct MCPClient: Sendable {
       throw MCPWireError.paramsMustBeObject
     }
     let extensions = try mergedMetadataExtensions(metadataExtensions)
-    let cacheKeys = try await cacheKeysIfEligible(
-      descriptor: descriptor,
-      params: rawParams,
-      semanticMetadata: extensions
-    )
+    // Request-scoped logging is an observable effect. A cache hit would skip the request and
+    // silently suppress those notifications, so log-enabled calls are intentionally non-cacheable.
+    let cacheKeys =
+      logging == nil
+      ? try await cacheKeysIfEligible(
+        descriptor: descriptor,
+        params: rawParams,
+        semanticMetadata: extensions
+      )
+      : []
     let cacheEpoch = await cacheEpochs.snapshot(descriptor: descriptor, params: rawParams)
     if await cacheEpochs.isCacheUsable(cacheEpoch), let cache = configuration.cache {
       for key in cacheKeys {
@@ -907,6 +944,7 @@ public struct MCPClient: Sendable {
       clientCapabilities: configuration.capabilities,
       clientInfo: configuration.implementation,
       progressToken: progressToken,
+      logLevel: logging?.level,
       traceContext: configuration.traceContext,
       extensions: extensions
     )
@@ -925,15 +963,18 @@ public struct MCPClient: Sendable {
         descriptor: descriptor,
         expectedProgressToken: progressToken,
         progress: progress,
+        logging: logging?.handler,
         deadline: deadline
       )
-      try await storeInCacheIfEligible(
-        result,
-        descriptor: descriptor,
-        params: rawParams,
-        semanticMetadata: extensions,
-        expectedEpoch: cacheEpoch
-      )
+      if logging == nil {
+        try await storeInCacheIfEligible(
+          result,
+          descriptor: descriptor,
+          params: rawParams,
+          semanticMetadata: extensions,
+          expectedEpoch: cacheEpoch
+        )
+      }
       await diagnostics.record(
         MCPDiagnosticEvent(
           id: "mcp.client.request.completed",
@@ -967,6 +1008,7 @@ public struct MCPClient: Sendable {
     descriptor: MCPMethodDescriptor,
     expectedProgressToken: MCPProgressToken?,
     progress: MCPProgressHandler?,
+    logging: MCPLoggingHandler?,
     deadline: ContinuousClock.Instant?
   ) async throws -> [String: MCPJSONValue] {
     let exchange: MCPClientExchange
@@ -987,7 +1029,8 @@ public struct MCPClient: Sendable {
           request: request,
           descriptor: descriptor,
           expectedProgressToken: expectedProgressToken,
-          progress: progress
+          progress: progress,
+          logging: logging
         )
       }
       return try await withThrowingTaskGroup(of: MCPRequestRaceResult.self) { group in
@@ -998,7 +1041,8 @@ public struct MCPClient: Sendable {
               request: request,
               descriptor: descriptor,
               expectedProgressToken: expectedProgressToken,
-              progress: progress
+              progress: progress,
+              logging: logging
             ))
         }
         group.addTask {
@@ -1099,7 +1143,8 @@ public struct MCPClient: Sendable {
     request: MCPWireRequest,
     descriptor: MCPMethodDescriptor,
     expectedProgressToken: MCPProgressToken?,
-    progress: MCPProgressHandler?
+    progress: MCPProgressHandler?,
+    logging: MCPLoggingHandler?
   ) async throws -> [String: MCPJSONValue] {
     var frameCount = 0
     var terminal: Result<[String: MCPJSONValue], MCPRPCError>?
@@ -1130,23 +1175,33 @@ public struct MCPClient: Sendable {
 
       switch frame {
       case .notification(let notification):
-        guard notification.method == "notifications/progress" else {
+        switch notification.method {
+        case "notifications/progress":
+          guard let expectedProgressToken, let progress else {
+            throw MCPClientError.protocolViolation(
+              "server sent progress for a request that did not request progress")
+          }
+          let value = try MCPProgressParams(json: .object(notification.params))
+          guard value.progressToken == expectedProgressToken else {
+            throw MCPClientError.protocolViolation("progress token does not match request metadata")
+          }
+          if let lastProgress, value.progress.compare(to: lastProgress) != .orderedDescending {
+            throw MCPClientError.protocolViolation("server progress must strictly increase")
+          }
+          lastProgress = value.progress
+          try await progress(value)
+
+        case "notifications/message":
+          guard let logging else {
+            throw MCPClientError.protocolViolation(
+              "server sent logging for a request that did not opt in")
+          }
+          try await logging(MCPLoggingMessageParams(json: .object(notification.params)))
+
+        default:
           throw MCPClientError.protocolViolation(
             "ordinary request received unexpected server notification \(notification.method)")
         }
-        guard let expectedProgressToken, let progress else {
-          throw MCPClientError.protocolViolation(
-            "server sent progress for a request that did not request progress")
-        }
-        let value = try MCPProgressParams(json: .object(notification.params))
-        guard value.progressToken == expectedProgressToken else {
-          throw MCPClientError.protocolViolation("progress token does not match request metadata")
-        }
-        if let lastProgress, value.progress.compare(to: lastProgress) != .orderedDescending {
-          throw MCPClientError.protocolViolation("server progress must strictly increase")
-        }
-        lastProgress = value.progress
-        try await progress(value)
 
       case .result(let result):
         guard result.id == request.id else {

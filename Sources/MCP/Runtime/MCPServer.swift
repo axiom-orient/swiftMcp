@@ -7,6 +7,8 @@ public struct MCPServerConfiguration: Sendable {
   public var includeServerInfo: Bool
   public var discoveryCache: MCPCachePolicy
   public var maximumToolSchemaCacheEntries: Int
+  /// Advertises and enables deprecated 2026 request-scoped `notifications/message` logging.
+  public var loggingEnabled: Bool
 
   public init(
     schemaValidator: any MCPJSONSchemaValidating = MCPJSONSchemaValidator(),
@@ -14,7 +16,8 @@ public struct MCPServerConfiguration: Sendable {
     subscriptionBufferLimit: Int = 128,
     includeServerInfo: Bool = true,
     discoveryCache: MCPCachePolicy = .defaultDiscovery,
-    maximumToolSchemaCacheEntries: Int = 256
+    maximumToolSchemaCacheEntries: Int = 256,
+    loggingEnabled: Bool = false
   ) {
     self.schemaValidator = schemaValidator
     self.maximumMetadataBytes = maximumMetadataBytes
@@ -22,6 +25,7 @@ public struct MCPServerConfiguration: Sendable {
     self.includeServerInfo = includeServerInfo
     self.discoveryCache = discoveryCache
     self.maximumToolSchemaCacheEntries = maximumToolSchemaCacheEntries
+    self.loggingEnabled = loggingEnabled
   }
 }
 
@@ -337,6 +341,7 @@ public struct MCPServerBuilder: Sendable {
     try validateConfiguration()
     try validateFeatureCompleteness()
     let capabilities = try deriveCapabilities()
+    try validateRequiredServerCapabilities(capabilities)
     return MCPServer(
       implementation: implementation,
       instructions: instructions,
@@ -427,8 +432,32 @@ public struct MCPServerBuilder: Sendable {
       resourceListChanged: resourceListChanged,
       resourceSubscriptions: resourceSubscriptions,
       completions: methods.contains("completion/complete"),
+      logging: configuration.loggingEnabled,
       extensions: extensionValues
     )
+  }
+
+  private func validateRequiredServerCapabilities(_ capabilities: MCPServerCapabilities) throws {
+    for descriptor in handlers.values.map(\.descriptor).sorted(by: { $0.name < $1.name }) {
+      let isAdvertised: Bool
+      switch descriptor.requiredServerCapability {
+      case .none:
+        isAdvertised = true
+      case .tools:
+        isAdvertised = capabilities.tools
+      case .prompts:
+        isAdvertised = capabilities.prompts
+      case .resources:
+        isAdvertised = capabilities.resources
+      case .completions:
+        isAdvertised = capabilities.completions
+      }
+      guard isAdvertised else {
+        throw MCPServerBuildError.incompleteFeature(
+          "\(descriptor.name) requires server capability \(descriptor.requiredServerCapability.rawValue)"
+        )
+      }
+    }
   }
 }
 
@@ -525,6 +554,41 @@ private actor MCPExecutionControl {
   }
 
   func reason() -> String? { cancellationReason }
+}
+
+private actor MCPLoggingGate {
+  private let threshold: MCPLoggingLevel
+  private let continuation: AsyncThrowingStream<MCPWireMessage, Error>.Continuation
+  private var terminal = false
+
+  init(
+    threshold: MCPLoggingLevel,
+    continuation: AsyncThrowingStream<MCPWireMessage, Error>.Continuation
+  ) {
+    self.threshold = threshold
+    self.continuation = continuation
+  }
+
+  func emit(_ params: MCPLoggingMessageParams) throws {
+    guard !terminal else {
+      throw MCPClientError.protocolViolation("log message emitted after terminal response")
+    }
+    guard params.level.severity >= threshold.severity else { return }
+    let notification = try MCPWireNotification(
+      method: "notifications/message",
+      params: params.json.objectValue ?? [:]
+    )
+    switch continuation.yield(.notification(notification)) {
+    case .enqueued, .dropped:
+      return
+    case .terminated:
+      throw CancellationError()
+    @unknown default:
+      throw MCPClientError.protocolViolation("unknown logging buffer state")
+    }
+  }
+
+  func finish() { terminal = true }
 }
 
 private actor MCPProgressGate {
@@ -762,6 +826,8 @@ public struct MCPServer: Sendable {
     control: MCPExecutionControl
   ) async {
     let started = ContinuousClock.now
+    var progressGate: MCPProgressGate?
+    var loggingGate: MCPLoggingGate?
     do {
       let authority =
         if let prepared {
@@ -771,7 +837,6 @@ public struct MCPServer: Sendable {
         }
       let descriptor = authority.descriptor
       let metadata = authority.metadata
-      let progressGate: MCPProgressGate?
       let reporter: MCPProgressReporter?
       if let token = metadata.progressToken {
         let gate = MCPProgressGate(token: token, continuation: continuation)
@@ -783,12 +848,22 @@ public struct MCPServer: Sendable {
         progressGate = nil
         reporter = nil
       }
+      let logger: MCPRequestLogger?
+      if configuration.loggingEnabled, let threshold = metadata.logLevel {
+        let gate = MCPLoggingGate(threshold: threshold, continuation: continuation)
+        loggingGate = gate
+        logger = MCPRequestLogger { params in try await gate.emit(params) }
+      } else {
+        loggingGate = nil
+        logger = nil
+      }
       let context = MCPRequestContext(
         id: request.id,
         method: descriptor,
         metadata: metadata,
         authorization: authorization,
-        progress: reporter
+        progress: reporter,
+        logger: logger
       )
 
       if request.method == "server/discover" {
@@ -798,8 +873,12 @@ public struct MCPServer: Sendable {
           cache: configuration.discoveryCache,
           metadata: try resultMetadata()
         )
+        await progressGate?.finish()
+        await loggingGate?.finish()
         try yieldResult(result.json, id: request.id, continuation: continuation)
       } else if request.method == "subscriptions/listen" {
+        await progressGate?.finish()
+        await loggingGate?.finish()
         try await runSubscription(
           request: request,
           continuation: continuation,
@@ -822,6 +901,8 @@ public struct MCPServer: Sendable {
             descriptor: descriptor,
             requestMetadata: metadata
           )
+          await progressGate?.finish()
+          await loggingGate?.finish()
           try yieldResult(.object(rawResult), id: request.id, continuation: continuation)
         } catch let error as MCPRPCError {
           throw error
@@ -831,7 +912,6 @@ public struct MCPServer: Sendable {
           throw MCPInvalidServerResult()
         }
       }
-      await progressGate?.finish()
       continuation.finish()
       let duration = ContinuousClock.now - started
       await diagnostics.record(
@@ -845,6 +925,8 @@ public struct MCPServer: Sendable {
           ]
         ))
     } catch let cancellation as MCPServerSubscriptionCancellation {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       continuation.finish(throwing: cancellation)
       await diagnostics.record(
         MCPDiagnosticEvent(
@@ -857,6 +939,8 @@ public struct MCPServer: Sendable {
           ]
         ))
     } catch is CancellationError {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       let reason = await control.reason()
       continuation.finish()
       await diagnostics.record(
@@ -870,10 +954,14 @@ public struct MCPServer: Sendable {
           ]
         ))
     } catch let error as MCPRPCError {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       continuation.yield(
         .error(MCPWireErrorResponse(id: request.id, error: Self.outboundError(error))))
       continuation.finish()
     } catch let error as MCPInvalidRequestParameters {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       continuation.yield(
         .error(
           MCPWireErrorResponse(
@@ -886,6 +974,8 @@ public struct MCPServer: Sendable {
           )))
       continuation.finish()
     } catch let error as MCPJSONError {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       continuation.yield(
         .error(
           MCPWireErrorResponse(
@@ -898,6 +988,8 @@ public struct MCPServer: Sendable {
           )))
       continuation.finish()
     } catch let error as MCPRegistryError {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       let rpc: MCPRPCError =
         switch error {
         case .unsupportedMethod, .wrongDirection: .methodNotFound
@@ -906,6 +998,8 @@ public struct MCPServer: Sendable {
       continuation.yield(.error(MCPWireErrorResponse(id: request.id, error: rpc)))
       continuation.finish()
     } catch {
+      await progressGate?.finish()
+      await loggingGate?.finish()
       continuation.yield(
         .error(
           MCPWireErrorResponse(
@@ -1184,23 +1278,60 @@ public struct MCPServer: Sendable {
     guard case .object(let inputRequests) = rawInputRequests else {
       throw MCPJSONError.invalidField(field: "inputRequests", reason: "expected object")
     }
-    for request in inputRequests.values {
-      let elicitation = try MCPElicitationRequest(json: request)
-      let supported: Bool =
-        switch elicitation.params.mode {
-        case .form: capabilities.elicitation?.form == true
-        case .url: capabilities.elicitation?.url == true
+    for rawRequest in inputRequests.values {
+      let request = try MCPInputRequest(json: rawRequest)
+      switch request {
+      case .elicitation(let elicitation):
+        let supported =
+          switch elicitation.params.mode {
+          case .form: capabilities.elicitation?.form == true
+          case .url: capabilities.elicitation?.url == true
+          }
+        guard supported else {
+          let required = try MCPClientCapabilities(
+            elicitation: try MCPElicitationCapabilities(
+              form: elicitation.params.mode == .form,
+              url: elicitation.params.mode == .url
+            ))
+          throw MCPRPCError.missingRequiredClientCapabilities(
+            "Client did not declare the elicitation capability required by the result",
+            requiredCapabilities: required
+          )
         }
-      guard supported else {
-        let required = try MCPClientCapabilities(
-          elicitation: try MCPElicitationCapabilities(
-            form: elicitation.params.mode == .form,
-            url: elicitation.params.mode == .url
-          ))
-        throw MCPRPCError.missingRequiredClientCapabilities(
-          "Client did not declare the elicitation capability required by the result",
-          requiredCapabilities: required
-        )
+
+      case .roots:
+        guard capabilities.roots else {
+          throw MCPRPCError.missingRequiredClientCapabilities(
+            "Client did not declare the roots capability required by the result",
+            requiredCapabilities: try MCPClientCapabilities(roots: true)
+          )
+        }
+
+      case .sampling(let sampling):
+        guard let declared = capabilities.sampling else {
+          throw MCPRPCError.missingRequiredClientCapabilities(
+            "Client did not declare the sampling capability required by the result",
+            requiredCapabilities: try MCPClientCapabilities(sampling: MCPSamplingCapabilities())
+          )
+        }
+        let usesTools = !sampling.params.tools.isEmpty || sampling.params.toolChoice != nil
+        if usesTools, !declared.tools {
+          throw MCPRPCError.missingRequiredClientCapabilities(
+            "Sampling request requires client sampling.tools capability",
+            requiredCapabilities: try MCPClientCapabilities(
+              sampling: MCPSamplingCapabilities(tools: true))
+          )
+        }
+        if let includeContext = sampling.params.includeContext,
+          includeContext != .none,
+          !declared.context
+        {
+          throw MCPRPCError.missingRequiredClientCapabilities(
+            "Sampling request requires client sampling.context capability",
+            requiredCapabilities: try MCPClientCapabilities(
+              sampling: MCPSamplingCapabilities(context: true))
+          )
+        }
       }
     }
   }

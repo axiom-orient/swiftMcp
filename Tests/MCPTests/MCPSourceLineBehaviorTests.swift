@@ -463,7 +463,7 @@ final class MCPSourceLineBehaviorTests: XCTestCase {
     try builder.register(MCPStandardMethods.callTool) { _, _ in
       try MCPCallToolResult(
         resultType: .inputRequired,
-        inputRequests: ["confirm": request],
+        inputRequests: ["confirm": .elicitation(request)],
         requestState: "confirmation-1"
       )
     }
