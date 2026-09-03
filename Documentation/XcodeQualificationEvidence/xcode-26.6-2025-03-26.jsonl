@@ -1,0 +1,9 @@
+{"recordType":"qualification","xcodeVersion":"26.6","xcodeBuild":"17F113","macOSVersion":"26.6.2","macOSBuild":"25G83","requestedRevision":"2025-03-26","returnedRevision":"2025-03-26","durationSeconds":12.836,"rawTranscriptSHA256":"db51383a392ca56c334cbfa4856c4358bab96a89e0c754a773559dc0c73c30d3","sanitized":true}
+{"direction":"client->xcode","method":"initialize","request":{"jsonrpc":"2.0","id":1,"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"swiftmcp-xcode-qualification","version":"1.0.0"}}}
+{"direction":"xcode->client","method":"initialize","result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"xcode-tools","version":"24952"},"capabilities":{"tools":{"listChanged":true}}}}
+{"direction":"client->xcode","method":"notifications/initialized","params":{}}
+{"direction":"client->xcode","method":"tools/list","request":{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}}
+{"direction":"xcode->client","method":"tools/list","result":{"redacted":true,"summary":"tools/list response redacted","toolCount":21,"toolNames":["DocumentationSearch","XcodeRefreshCodeIssuesInFile","XcodeMakeDir","XcodeWrite","XcodeGetCurrentFile","XcodeLS","RunAllTests","RenderPreview","XcodeUpdate","GetBuildLog","XcodeListWindows","GetTestList","RunSomeTests","XcodeGlob","XcodeMV","XcodeGrep","XcodeRead","XcodeRM","RunCodeSnippet","BuildProject","XcodeListNavigatorIssues"]}}
+{"direction":"client->xcode","method":"tools/call","request":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"XcodeListWindows"}}}
+{"direction":"xcode->client","method":"tools/call","result":{"redacted":true,"status":"success","summary":"XcodeListWindows succeeded","workspacePath":"[REDACTED]"}}
+{"direction":"proxy","event":"clean-exit","status":0}

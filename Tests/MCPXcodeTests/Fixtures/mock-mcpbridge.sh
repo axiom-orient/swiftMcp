@@ -5,6 +5,8 @@ mode="${MOCK_XCODE_MODE:-normal}"
 revision="${MOCK_XCODE_REVISION:-2025-06-18}"
 log_file="${MOCK_XCODE_LOG_FILE:-}"
 instance=1
+list_count=0
+initialize_id=""
 
 if [ -n "$log_file" ]; then
   launch_count=0
@@ -38,6 +40,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
       id="$(request_id "$line")"
+      initialize_id="$id"
       if [ "$mode" = "ignore-initialize" ]; then
         continue
       fi
@@ -55,9 +58,15 @@ while IFS= read -r line; do
 
     *'"method":"tools/list"'*)
       id="$(request_id "$line")"
+      list_count=$((list_count + 1))
       printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"XcodeListWindows\",\"description\":\"Mock Xcode tool\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}"
       if [ "$mode" = "duplicate-list-response" ]; then
         printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"XcodeListWindows\",\"description\":\"Mock Xcode tool\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}"
+      fi
+      if [ "$mode" = "late-response-after-retirement-window" ] && [ "$list_count" -eq 256 ]; then
+        # The initialize response is older than the retired-ID ledger window in the old client.
+        # A correct monotonic-ID implementation ignores this duplicate indefinitely.
+        printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$initialize_id,\"result\":{\"protocolVersion\":\"$revision\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mock-xcode\",\"version\":\"1.0.0\"}}}"
       fi
       if [ "$mode" = "exit-after-list" ]; then
         exit 0
@@ -74,6 +83,9 @@ while IFS= read -r line; do
       id="$(request_id "$line")"
       if [ "$mode" = "ignore-tool-call" ]; then
         continue
+      fi
+      if [ "$mode" = "delay-tool-call" ]; then
+        /bin/sleep 0.15
       fi
       printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"isError\":false}}"
       ;;

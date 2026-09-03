@@ -32,17 +32,18 @@ Its canonical product identity is the strict 2026 stateless `MCP` runtime, the i
   [Documentation/XcodeMCP.md](Documentation/XcodeMCP.md).
 
 The built-in validator handles self-contained JSON Schema 2020-12 and draft-07 profiles, including
-local dynamic references. Unsupported dialects and unresolved external references fail closed; a
-host can explicitly supply another validator.
+local dynamic references. Valid schemas that require an unsupported dialect or external reference
+resolver are preserved without implicit network access; a host can explicitly supply another
+validator when it needs local validation for those schemas.
 
 ## Install
 
-Add SwiftMCP from GitHub with the current release tag `0.4.0`. This release includes the independent
-`MCPTasks` product and the previously released stateless core, transports, and Xcode edge.
+Add SwiftMCP from GitHub with the current release tag `0.4.1`. This release includes the independent
+`MCPTasks` product, strict stateless core, and the corrected Xcode 26.3+ edge.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.3.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.4.1")
 ]
 ```
 
@@ -155,7 +156,7 @@ verifier. Put public deployments behind a trusted TLS terminator and configure t
 
 ## Xcode MCP
 
-Xcode exposes its tools to external agents through a stdio server launched as `xcrun mcpbridge`.
+Xcode 26.3+ exposes its tools to external agents through a stdio server launched as `xcrun mcpbridge`.
 Use `MCPXcodeClient` when the peer is Xcode; do not route Xcode through the strict 2026 `MCPClient`.
 
 ```swift
@@ -176,10 +177,13 @@ await xcode.close()
 ```
 
 `MCPXcode` intentionally qualifies only the Xcode-observed revisions `2024-11-05`, `2025-03-26`,
-and `2025-06-18`. The current default is `2025-06-18`; older Xcode deployments can pin an older
-qualified revision explicitly. It uses integer JSON-RPC request IDs and exposes only initialization
-plus `tools/list` / `tools/call`. Unsupported bridge behavior fails explicitly; there is no automatic
-legacy downgrade or general compatibility runtime.
+and `2025-06-18`. The current default is `2025-06-18`; Xcode 26.3 uses `2024-11-05`, while the
+current Xcode 26.6 qualification accepts `2025-03-26` and `2025-06-18`. Older deployments can pin
+the matching qualified revision explicitly. It uses integer JSON-RPC request IDs and exposes only
+initialization plus `tools/list` / `tools/call`. `requestTimeout` defaults to `.zero` (disabled), so
+long Xcode operations can complete; callers may set a positive timeout or cancel. `ioLimits` is a
+host-configurable safety policy, not an MCP frame-size rule. Unsupported bridge behavior fails
+explicitly; there is no automatic legacy downgrade or general compatibility runtime.
 
 Live qualification is explicit and test-only. `Documentation/XcodeQualification.md` records the
 macOS procedure that runs the production client through a transparent proxy and preserves the raw
@@ -221,8 +225,8 @@ metadata.
 5. Publish release notes from that tagged commit and use GitHub’s generated source archive rather
    than a workspace ZIP.
 
-Existing release tags `0.3.0` and `0.4.0` are immutable. Future changes require a new semantic
-version; never retag either existing version.
+Existing release tags `0.3.0`, `0.4.0`, and `0.4.1` are immutable. Future changes require a new
+semantic version; never retag an existing version.
 
 If a release must be withdrawn, stop distribution of the affected tag and direct consumers to the
 last verified tag. Do not retag a different commit under the same version.

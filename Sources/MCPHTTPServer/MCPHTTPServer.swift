@@ -658,35 +658,11 @@ public struct MCPHTTPServerHandler: Sendable {
             }
             guard terminalSeen else { throw MCPHTTPError.connectionClosed }
             pair.continuation.finish()
-          } catch let cancellation as MCPServerSubscriptionCancellation {
-            // A server that tears down a subscription stream MUST send `notifications/cancelled`
-            // referencing the `subscriptions/listen` request. The transport rule that lets a
-            // *client* cancel by closing the HTTP stream does not extend to the server: closing
-            // alone is indistinguishable from an abrupt disconnect, which the client is told to
-            // treat as a candidate for reconnection. The notification therefore precedes the close
-            // here exactly as it does on stdio.
-            do {
-              guard cancellation.requestID == requestID else {
-                throw MCPHTTPError.io("subscription cancellation id does not match the request")
-              }
-              let params = MCPCancelledParams(
-                requestID: cancellation.requestID,
-                reason: cancellation.reason
-              )
-              try Self.yieldSSE(
-                .notification(
-                  try MCPWireNotification(
-                    method: "notifications/cancelled",
-                    params: params.json.objectValue ?? [:]
-                  )),
-                into: pair.continuation,
-                maximumEventBytes: configuration.maximumSSEEventBytes
-              )
-              pair.continuation.finish()
-            } catch {
-              pair.continuation.finish(throwing: error)
-              await exchange.cancel(reason: "HTTP subscription cancellation failed")
-            }
+          } catch is MCPServerSubscriptionCancellation {
+            // Streamable HTTP represents server-side subscription cancellation by closing the
+            // response stream. `notifications/cancelled` is a stdio lifecycle signal and must not
+            // be emitted on this HTTP stream.
+            pair.continuation.finish()
           } catch {
             pair.continuation.finish(throwing: error)
             await exchange.cancel(reason: "HTTP response stream failed")

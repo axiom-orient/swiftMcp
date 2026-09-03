@@ -59,6 +59,64 @@
     public let nextCursor: String?
   }
 
+  /// Resource limits for the Xcode stdio edge.
+  ///
+  /// These are SDK safety limits, not MCP protocol limits. MCP does not define a fixed maximum
+  /// stdio frame size; hosts can raise them when an Xcode tool returns a larger document.
+  public struct MCPXcodeIOLimits: Sendable, Hashable {
+    public let maximumFrameBytes: Int
+    public let readChunkBytes: Int
+    public let jsonLimits: MCPJSONLimits
+
+    public init(
+      maximumFrameBytes: Int = 64 * 1024 * 1024,
+      readChunkBytes: Int = 16_384,
+      jsonLimits: MCPJSONLimits = MCPJSONLimits(
+        maximumDocumentBytes: 64 * 1024 * 1024,
+        maximumStringBytes: 32 * 1024 * 1024
+      )
+    ) throws {
+      guard maximumFrameBytes > 0 else {
+        throw MCPJSONError.invalidField(field: "maximumFrameBytes", reason: "must be positive")
+      }
+      guard readChunkBytes > 0 else {
+        throw MCPJSONError.invalidField(field: "readChunkBytes", reason: "must be positive")
+      }
+      try jsonLimits.validate()
+      self.maximumFrameBytes = maximumFrameBytes
+      self.readChunkBytes = readChunkBytes
+      self.jsonLimits = jsonLimits
+    }
+
+    public static let `default` = MCPXcodeIOLimits(
+      uncheckedMaximumFrameBytes: 64 * 1024 * 1024,
+      readChunkBytes: 16_384,
+      jsonLimits: MCPJSONLimits(
+        maximumDocumentBytes: 64 * 1024 * 1024,
+        maximumStringBytes: 32 * 1024 * 1024
+      )
+    )
+
+    fileprivate func makeStdioLimits() -> MCPStdioLimits {
+      // Values are validated by init and by the private default constructor above.
+      try! MCPStdioLimits(
+        maximumFrameBytes: maximumFrameBytes,
+        readChunkBytes: readChunkBytes,
+        jsonLimits: jsonLimits
+      )
+    }
+
+    private init(
+      uncheckedMaximumFrameBytes: Int,
+      readChunkBytes: Int,
+      jsonLimits: MCPJSONLimits
+    ) {
+      maximumFrameBytes = uncheckedMaximumFrameBytes
+      self.readChunkBytes = readChunkBytes
+      self.jsonLimits = jsonLimits
+    }
+  }
+
   public struct MCPXcodeConfiguration: Sendable {
     public let executableURL: URL
     public let arguments: [String]
@@ -66,7 +124,10 @@
     public let currentDirectoryURL: URL?
     public let implementation: MCPImplementation
     public let preferredProtocolRevision: MCPXcodeProtocolRevision
+    /// SDK deadline for one legacy request. `.zero` disables the SDK deadline so long-running
+    /// Xcode tools can finish; callers can still cancel the task or provide a positive deadline.
     public let requestTimeout: Duration
+    public let ioLimits: MCPXcodeIOLimits
     public let diagnosticHandler: (@Sendable (String) async -> Void)?
     public let toolsChangedHandler: (@Sendable () async -> Void)?
 
@@ -77,12 +138,14 @@
       currentDirectoryURL: URL? = nil,
       implementation: MCPImplementation,
       preferredProtocolRevision: MCPXcodeProtocolRevision = .preferred,
-      requestTimeout: Duration = .seconds(30),
+      requestTimeout: Duration = .zero,
+      ioLimits: MCPXcodeIOLimits = .default,
       diagnosticHandler: (@Sendable (String) async -> Void)? = nil,
       toolsChangedHandler: (@Sendable () async -> Void)? = nil
     ) throws {
-      guard requestTimeout > .zero else {
-        throw MCPJSONError.invalidField(field: "requestTimeout", reason: "must be positive")
+      guard requestTimeout >= .zero else {
+        throw MCPJSONError.invalidField(
+          field: "requestTimeout", reason: "must be zero (disabled) or positive")
       }
       guard executableURL.isFileURL else {
         throw MCPJSONError.invalidField(field: "executableURL", reason: "must be a file URL")
@@ -94,6 +157,7 @@
       self.implementation = implementation
       self.preferredProtocolRevision = preferredProtocolRevision
       self.requestTimeout = requestTimeout
+      self.ioLimits = ioLimits
       self.diagnosticHandler = diagnosticHandler
       self.toolsChangedHandler = toolsChangedHandler
     }
@@ -142,18 +206,14 @@
   /// Xcode's tool surface: `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
   /// The canonical `MCP` product remains 2026-07-28-only and stateless.
   public actor MCPXcodeClient {
-    private static let stdioLimits = MCPStdioLimits.default
-
     private let configuration: MCPXcodeConfiguration
+    private let stdioLimits: MCPStdioLimits
     private var processBox: MCPXcodeProcessBox?
     private var writer: MCPStdioWriter?
     private var generation: UInt64 = 0
-    private static let maximumRetiredRequestIDs = 256
 
     private var nextRequestID: Int64 = 1
     private var pending: [Int64: MCPXcodePendingRequest] = [:]
-    private var retiredRequestIDs: Set<Int64> = []
-    private var retiredRequestOrder: [Int64] = []
     private var lifecycle: MCPXcodeLifecycle = .idle
     private var lifecycleTransitionID: UInt64 = 0
     private var connectTask: Task<Void, Never>?
@@ -162,6 +222,7 @@
 
     public init(configuration: MCPXcodeConfiguration) {
       self.configuration = configuration
+      stdioLimits = configuration.ioLimits.makeStdioLimits()
     }
 
     public func connect() async throws -> MCPXcodeConnectionInfo {
@@ -366,10 +427,9 @@
         "params": .object(params),
       ])
       do {
-        try await writer.writeFrame(envelope.encoded(limits: Self.stdioLimits.jsonLimits))
+        try await writer.writeFrame(envelope.encoded(limits: stdioLimits.jsonLimits))
       } catch {
         if let request = pending.removeValue(forKey: id) {
-          rememberRetiredRequest(id)
           request.continuation.finish(throwing: error)
         }
         throw MCPXcodeError.transport("write \(method) failed: \(error)")
@@ -420,7 +480,20 @@
       id: Int64,
       method: String
     ) async throws -> [String: MCPJSONValue] {
-      try await withThrowingTaskGroup(of: [String: MCPJSONValue].self) { group in
+      guard configuration.requestTimeout > .zero else {
+        var iterator = stream.makeAsyncIterator()
+        guard let value = try await iterator.next() else {
+          // Cancellation may make AsyncThrowingStream finish its iterator without preserving
+          // the continuation's error. Reclassify that terminal nil while the caller is cancelled
+          // so the owning request path can retire the ID and notify the peer.
+          try Task.checkCancellation()
+          throw MCPXcodeError.transport("response stream ended for request \(id)")
+        }
+        return value
+      }
+
+      let timeout = configuration.requestTimeout
+      return try await withThrowingTaskGroup(of: [String: MCPJSONValue].self) { group in
         group.addTask {
           var iterator = stream.makeAsyncIterator()
           guard let value = try await iterator.next() else {
@@ -432,7 +505,7 @@
           }
           return value
         }
-        group.addTask { [timeout = configuration.requestTimeout] in
+        group.addTask {
           try await ContinuousClock().sleep(for: timeout)
           throw MCPXcodeError.timeout(method: method)
         }
@@ -455,7 +528,7 @@
         "params": .object(params),
       ])
       do {
-        try await writer.writeFrame(envelope.encoded(limits: Self.stdioLimits.jsonLimits))
+        try await writer.writeFrame(envelope.encoded(limits: stdioLimits.jsonLimits))
       } catch {
         throw MCPXcodeError.transport("write \(method) failed: \(error)")
       }
@@ -464,7 +537,6 @@
     @discardableResult
     private func retirePendingRequest(id: Int64, failure: Error) -> Bool {
       guard let request = pending.removeValue(forKey: id) else { return false }
-      rememberRetiredRequest(id)
       request.continuation.finish(throwing: failure)
       return true
     }
@@ -486,15 +558,6 @@
       let value = nextRequestID
       nextRequestID += 1
       return value
-    }
-
-    private func rememberRetiredRequest(_ id: Int64) {
-      retiredRequestOrder.removeAll { $0 == id }
-      retiredRequestIDs.insert(id)
-      retiredRequestOrder.append(id)
-      while retiredRequestOrder.count > Self.maximumRetiredRequestIDs {
-        retiredRequestIDs.remove(retiredRequestOrder.removeFirst())
-      }
     }
 
     private nonisolated static func waitForExit(_ process: Process, attempts: Int) async -> Bool {
@@ -557,7 +620,7 @@
 
       let stdout = MCPStdioIO.lines(
         from: stdoutPipe.fileHandleForReading,
-        limits: Self.stdioLimits
+        limits: stdioLimits
       )
       Task { [weak self] in
         guard let self else { return }
@@ -573,7 +636,7 @@
 
       let stderr = MCPStdioIO.lines(
         from: stderrPipe.fileHandleForReading,
-        limits: Self.stdioLimits
+        limits: stdioLimits
       )
       Task { [handler = configuration.diagnosticHandler] in
         do {
@@ -589,7 +652,7 @@
 
     private func receive(_ data: Data, generation: UInt64) async throws {
       guard generation == self.generation else { return }
-      let value = try MCPJSONValue.parse(data, limits: Self.stdioLimits.jsonLimits)
+      let value = try MCPJSONValue.parse(data, limits: stdioLimits.jsonLimits)
       let envelope = try MCPJSONObject(value)
       guard try envelope.requiredString("jsonrpc") == "2.0" else {
         throw MCPXcodeError.malformedResponse("jsonrpc must equal 2.0")
@@ -612,7 +675,10 @@
           throw MCPXcodeError.malformedResponse("Xcode responses must use integer ids")
         }
         guard let pendingRequest = pending[id] else {
-          if retiredRequestIDs.contains(id) {
+          // Request IDs are strictly monotonic and never reused. A positive ID lower than the
+          // next allocation was issued by this connection and its response is therefore a late
+          // or duplicate frame. Ignore it forever without retaining a tombstone set.
+          if id > 0 && id < nextRequestID {
             return
           }
           throw MCPXcodeError.malformedResponse("response id \(id) has no pending request")
@@ -635,7 +701,6 @@
             data: errorObject.values["data"]
           )
           pending.removeValue(forKey: id)
-          rememberRetiredRequest(id)
           pendingRequest.continuation.finish(throwing: error)
           return
         }
@@ -643,7 +708,6 @@
           throw MCPXcodeError.malformedResponse("response result must be an object")
         }
         pending.removeValue(forKey: id)
-        rememberRetiredRequest(id)
         _ = pendingRequest.continuation.yield(result)
         pendingRequest.continuation.finish()
         return
@@ -742,8 +806,6 @@
       generation &+= 1
       let requests = pending.values
       pending.removeAll(keepingCapacity: true)
-      retiredRequestIDs.removeAll(keepingCapacity: true)
-      retiredRequestOrder.removeAll(keepingCapacity: true)
       for request in requests { request.continuation.finish(throwing: failure) }
 
       let effect = MCPXcodeStopEffect(id: stopID, writer: writer, processBox: processBox)

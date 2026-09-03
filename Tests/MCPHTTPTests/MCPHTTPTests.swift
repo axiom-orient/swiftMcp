@@ -1814,20 +1814,19 @@ final class MCPHTTPTests: XCTestCase {
         return XCTFail("HTTP subscription did not acknowledge")
       }
 
-      // A server tearing down a subscription stream must send notifications/cancelled referencing
-      // the subscriptions/listen request. Closing the SSE stream alone is the *client's*
-      // cancellation signal and is indistinguishable from an abrupt disconnect, so the client must
-      // observe an explicit peer cancellation here rather than a truncated-stream transport error.
+      // Streamable HTTP represents server-side cancellation by closing the SSE stream. It must not
+      // emit the stdio-only notifications/cancelled signal, so the client observes a transport
+      // closure rather than peerCancelled.
       await server.cancelAllSubscriptions(reason: "maintenance")
       do {
         _ = try await iterator.next()
         XCTFail("server cancellation must interrupt the HTTP subscription")
       } catch let error as MCPClientError {
-        guard case .peerCancelled(let reason) = error else {
+        guard case .transport(let message) = error else {
           await httpServer.shutdown()
           return XCTFail("unexpected client error: \(error)")
         }
-        XCTAssertEqual(reason, "maintenance")
+        XCTAssertTrue(message.contains("subscription stream ended"))
       }
     } catch {
       await httpServer.shutdown()

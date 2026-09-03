@@ -619,6 +619,38 @@ final class MCPRuntimeTests: XCTestCase {
     _ = try await defaultClient.listTools()
   }
 
+  func testDefaultRuntimePreservesExternalReferenceToolSchemasWithoutNetworkFetch() async throws {
+    let externalReference = "https://schemas.example.test/tools/echo-input.json"
+    let tool = try MCPTool(
+      name: "external-reference",
+      inputSchema: [
+        "type": .string("object"),
+        "$schema": .string("https://json-schema.org/draft/2020-12/schema"),
+        "$ref": .string(externalReference),
+      ]
+    )
+    var builder = try MCPServerBuilder(implementation: implementation("external-reference-server"))
+    builder.setToolResolver { name, _ in name == tool.name ? tool : nil }
+    try builder.register(MCPStandardMethods.listTools) { _, _ in
+      MCPListToolsResult(tools: [tool])
+    }
+    try builder.register(MCPStandardMethods.callTool) { _, _ in
+      try MCPCallToolResult(content: [])
+    }
+    let server = try builder.build()
+    let client = try MCPClient(
+      transport: MCPInMemoryClientTransport(server: server),
+      configuration: MCPClientConfiguration(
+        implementation: implementation("external-reference-client"),
+        capabilities: MCPClientCapabilities()
+      )
+    )
+
+    let listed = try await client.listTools()
+    XCTAssertEqual(listed.tools.count, 1)
+    XCTAssertEqual(listed.tools[0].inputSchema["$ref"], .string(externalReference))
+  }
+
   func testServerRejectsStructuredOutputThatViolatesDeclaredSchema() async throws {
     let tool = try tool()
     var builder = try MCPServerBuilder(implementation: implementation("validated-output"))

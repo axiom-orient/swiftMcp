@@ -11,7 +11,7 @@ public struct MCPServerConfiguration: Sendable {
   public var loggingEnabled: Bool
 
   public init(
-    schemaValidator: any MCPJSONSchemaValidating = MCPJSONSchemaValidator(),
+    schemaValidator: any MCPJSONSchemaValidating = MCPInteroperableJSONSchemaValidator(),
     maximumMetadataBytes: Int = 64 * 1_024,
     subscriptionBufferLimit: Int = 128,
     includeServerInfo: Bool = true,

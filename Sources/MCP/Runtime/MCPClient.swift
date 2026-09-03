@@ -162,7 +162,7 @@ public struct MCPClientConfiguration: Sendable {
     subscriptionBufferLimit: Int = 128,
     traceContext: [String: String] = [:],
     metadataExtensions: [String: MCPJSONValue] = [:],
-    schemaValidator: any MCPJSONSchemaValidating = MCPJSONSchemaValidator(),
+    schemaValidator: any MCPJSONSchemaValidating = MCPInteroperableJSONSchemaValidator(),
     cache: (any MCPCacheStore)? = nil,
     cacheAuthorizationPartition: String? = nil
   ) throws {

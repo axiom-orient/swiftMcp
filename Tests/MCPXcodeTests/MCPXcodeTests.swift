@@ -24,12 +24,27 @@
       XCTAssertEqual(configuration.arguments, ["mcpbridge"])
     }
 
-    func testConfigurationRejectsNonPositiveTimeout() throws {
+    func testConfigurationDefaultsToDisabledRequestTimeoutAndRelaxedIO() throws {
       let implementation = try MCPImplementation(name: "test-agent", version: "1.0.0")
-      XCTAssertThrowsError(
+      let configuration = try MCPXcodeConfiguration(implementation: implementation)
+
+      XCTAssertEqual(configuration.requestTimeout, .zero)
+      XCTAssertEqual(configuration.ioLimits.maximumFrameBytes, 64 * 1024 * 1024)
+      XCTAssertEqual(configuration.ioLimits.jsonLimits.maximumDocumentBytes, 64 * 1024 * 1024)
+    }
+
+    func testConfigurationRejectsNegativeTimeoutButAcceptsZero() throws {
+      let implementation = try MCPImplementation(name: "test-agent", version: "1.0.0")
+      XCTAssertNoThrow(
         try MCPXcodeConfiguration(
           implementation: implementation,
           requestTimeout: .zero
+        )
+      )
+      XCTAssertThrowsError(
+        try MCPXcodeConfiguration(
+          implementation: implementation,
+          requestTimeout: .seconds(-1)
         )
       )
     }
@@ -44,7 +59,46 @@
 
       let result = try await client.callTool(name: "XcodeListWindows")
       XCTAssertEqual(result.content.count, 1)
+      XCTAssertEqual(result.content, [.text(MCPTextContent(text: "ok"))])
+      XCTAssertNil(result.structuredContent)
       XCTAssertFalse(result.isError)
+      await client.close()
+    }
+
+    func testEveryQualifiedRevisionCompletesFullHandshakeAndToolCall() async throws {
+      for revision in MCPXcodeProtocolRevision.allCases {
+        let client = try makeClient(mode: "normal", revision: revision)
+        let connection = try await client.connect()
+        XCTAssertEqual(connection.protocolRevision, revision)
+        let tools = try await client.listTools()
+        XCTAssertEqual(tools.tools.map(\.name), ["XcodeListWindows"])
+        let result = try await client.callTool(name: "XcodeListWindows")
+        XCTAssertEqual(result.content, [.text(MCPTextContent(text: "ok"))])
+        XCTAssertNil(result.structuredContent)
+        await client.close()
+      }
+    }
+
+    func testNegotiatedOlderSupportedRevisionIsAccepted() async throws {
+      let client = try makeClient(
+        mode: "normal",
+        revision: .v2024November05,
+        preferredRevision: .v2025June18
+      )
+
+      let connection = try await client.connect()
+      XCTAssertEqual(connection.protocolRevision, .v2024November05)
+      let tools = try await client.listTools()
+      XCTAssertEqual(tools.tools.map(\.name), ["XcodeListWindows"])
+      await client.close()
+    }
+
+    func testLongToolCallCanCompleteWithoutSDKDeadline() async throws {
+      let client = try makeClient(mode: "delay-tool-call", timeout: .zero)
+      _ = try await client.connect()
+
+      let result = try await client.callTool(name: "XcodeListWindows")
+      XCTAssertEqual(result.content, [.text(MCPTextContent(text: "ok"))])
       await client.close()
     }
 
@@ -183,6 +237,25 @@
       XCTAssertTrue(try logContents(logURL).contains("notifications/cancelled"))
     }
 
+    func testOrdinaryToolCancellationWithoutSDKDeadlineNotifiesPeer() async throws {
+      let logURL = temporaryLogURL()
+      let client = try makeClient(mode: "ignore-tool-call", timeout: .zero, logURL: logURL)
+      _ = try await client.connect()
+
+      let task = Task { try await client.callTool(name: "XcodeListWindows") }
+      try await Task.sleep(for: .milliseconds(50))
+      task.cancel()
+      do {
+        _ = try await task.value
+        XCTFail("cancelled tool call unexpectedly completed")
+      } catch is CancellationError {
+        // Expected.
+      }
+
+      await client.close()
+      XCTAssertTrue(try logContents(logURL).contains("notifications/cancelled"))
+    }
+
     func testOrdinaryToolCancellationNotifiesPeerRepeatedly() async throws {
       for _ in 0..<10 {
         try await testOrdinaryToolCancellationNotifiesPeer()
@@ -194,6 +267,19 @@
       _ = try await client.listTools()
       let result = try await client.callTool(name: "XcodeListWindows")
       XCTAssertFalse(result.isError)
+      await client.close()
+    }
+
+    func testLateDuplicateAfterRetirementWindowDoesNotPoisonConnection() async throws {
+      let client = try makeClient(mode: "late-response-after-retirement-window")
+      _ = try await client.connect()
+
+      for _ in 0..<256 {
+        let tools = try await client.listTools()
+        XCTAssertEqual(tools.tools.map(\.name), ["XcodeListWindows"])
+      }
+      let result = try await client.callTool(name: "XcodeListWindows")
+      XCTAssertEqual(result.content, [.text(MCPTextContent(text: "ok"))])
       await client.close()
     }
 
@@ -273,7 +359,10 @@
     private func makeClient(
       mode: String,
       timeout: Duration = .seconds(2),
-      logURL: URL? = nil
+      logURL: URL? = nil,
+      revision: MCPXcodeProtocolRevision = .v2025June18,
+      preferredRevision: MCPXcodeProtocolRevision? = nil,
+      ioLimits: MCPXcodeIOLimits = .default
     ) throws -> MCPXcodeClient {
       guard
         let fixtureURL = Bundle.module.url(
@@ -287,7 +376,7 @@
 
       var environment: [String: String] = [
         "MOCK_XCODE_MODE": mode,
-        "MOCK_XCODE_REVISION": "2025-06-18",
+        "MOCK_XCODE_REVISION": revision.rawValue,
       ]
       if let logURL { environment["MOCK_XCODE_LOG_FILE"] = logURL.path }
 
@@ -296,7 +385,9 @@
         arguments: [fixtureURL.path],
         environment: environment,
         implementation: try MCPImplementation(name: "test-agent", version: "1.0.0"),
-        requestTimeout: timeout
+        preferredProtocolRevision: preferredRevision ?? revision,
+        requestTimeout: timeout,
+        ioLimits: ioLimits
       )
       return MCPXcodeClient(configuration: configuration)
     }

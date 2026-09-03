@@ -32,17 +32,18 @@ English: [README.md](README.md)
   자세한 내용은 [Documentation/XcodeMCP.md](Documentation/XcodeMCP.md)를 참고하세요.
 
 기본 validator는 local dynamic reference를 포함한 self-contained JSON Schema 2020-12와 draft-07
-프로필을 처리합니다. 지원하지 않는 dialect와 해석할 수 없는 외부 reference는 fail-closed로
-거부합니다. 다른 validator가 필요하면 호스트가 명시적으로 주입해야 합니다.
+프로필을 처리합니다. 지원하지 않는 dialect 또는 외부 reference resolver가 필요한 유효한 schema는
+암묵적인 네트워크 접근 없이 보존합니다. 해당 schema를 로컬에서 검증해야 할 때는 호스트가 다른
+validator를 명시적으로 주입할 수 있습니다.
 
 ## 설치
 
-GitHub에서는 현재 릴리스 태그 `0.4.0`을 사용합니다. 이 릴리스에는 독립적인 `MCPTasks`
-product와 기존 stateless core, transport, Xcode edge가 함께 포함됩니다.
+GitHub에서는 현재 릴리스 태그 `0.4.1`을 사용합니다. 이 릴리스에는 독립적인 `MCPTasks`, strict
+stateless core, 수정된 Xcode 26.3+ edge가 함께 포함됩니다.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.3.0")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.4.1")
 ]
 ```
 
@@ -154,7 +155,7 @@ Origin 정책을 구성하세요.
 
 ## Xcode MCP
 
-Xcode는 `xcrun mcpbridge`로 실행되는 stdio MCP server를 외부 agent에 제공합니다. Xcode peer에는
+Xcode 26.3+는 `xcrun mcpbridge`로 실행되는 stdio MCP server를 외부 agent에 제공합니다. Xcode peer에는
 strict 2026 `MCPClient`가 아니라 `MCPXcodeClient`를 사용합니다.
 
 ```swift
@@ -175,9 +176,12 @@ await xcode.close()
 ```
 
 `MCPXcode`는 Xcode에서 실제 관찰된 `2024-11-05`, `2025-03-26`, `2025-06-18`만 qualified
-revision으로 허용합니다. 기본값은 `2025-06-18`이며 구형 Xcode는 더 오래된 qualified revision을
-명시적으로 pin할 수 있습니다. 정수 JSON-RPC request ID를 사용하고 surface도 initialization과
-`tools/list` / `tools/call`로 제한합니다. 자동 legacy downgrade나 범용 compatibility runtime은 없습니다.
+revision으로 허용합니다. Xcode 26.3은 `2024-11-05`, 현재 Xcode 26.6 qualification은
+`2025-03-26`과 `2025-06-18`을 사용하며 기본값은 `2025-06-18`입니다. 정수 JSON-RPC request ID를
+사용하고 surface도 initialization과 `tools/list` / `tools/call`로 제한합니다. `requestTimeout` 기본값은
+`.zero`(비활성)이므로 긴 Xcode 작업이 끝날 수 있으며, caller가 양수 timeout 또는 cancellation을
+선택할 수 있습니다. `ioLimits`는 호스트가 조정하는 안전 정책이지 MCP frame-size 규칙이 아닙니다.
+자동 legacy downgrade나 범용 compatibility runtime은 없습니다.
 
 실제 Xcode qualification은 명시적으로만 실행합니다. `Documentation/XcodeQualification.md`의
 절차는 production client를 test-only 투명 proxy를 통해 실행해 raw `mcpbridge` transcript를
@@ -219,8 +223,8 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 5. 태그를 만든 commit에서 release note를 작성하고, 작업 공간 ZIP 대신 GitHub가 생성한 source archive를
    사용합니다.
 
-기존 릴리스 tag `0.3.0`과 `0.4.0`은 변경하지 않습니다. 이후 변경은 새 semantic version을
-사용해야 하며, 어느 기존 버전도 다시 tag하지 마세요.
+기존 릴리스 tag `0.3.0`, `0.4.0`, `0.4.1`은 변경하지 않습니다. 이후 변경은 새 semantic
+version을 사용해야 하며, 어느 기존 버전도 다시 tag하지 마세요.
 
 배포를 철회해야 하면 영향을 받는 tag의 배포를 중단하고, 마지막으로 검증한 tag를 안내합니다. 같은
 버전으로 다른 commit을 다시 tag하지 마세요.

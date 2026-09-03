@@ -1,7 +1,7 @@
 # MCPXcode
 
-`MCPXcode` is a narrow macOS adapter for Apple's `xcrun mcpbridge`. It is not a general pre-2026
-MCP implementation and it is not part of the modern protocol core.
+`MCPXcode` is a narrow macOS adapter for Apple's `xcrun mcpbridge` on Xcode 26.3+. It is not a
+general pre-2026 MCP implementation and it is not part of the modern protocol core.
 
 ## Boundary
 
@@ -30,9 +30,9 @@ setup; that does not require a second wire adapter here. `MCPXcode` continues to
 Apple does not publish a stable `mcpbridge` wire revision contract. The adapter therefore admits
 only revisions with concrete Xcode interoperability evidence:
 
-- `2024-11-05` — observed with Xcode 26.3.
-- `2025-03-26` — observed with Xcode 26.6.
-- `2025-06-18` — observed with current Xcode 27 integrations and used as the default.
+- `2024-11-05` — the Xcode 26.3 qualified revision.
+- `2025-03-26` — observed with current Xcode 26.6.
+- `2025-06-18` — observed with current Xcode 26.6 and Xcode 27 integrations; used as the default.
 
 The configured revision is a deliberate policy choice, not an automatic fallback chain. The
 revision returned by `initialize` is the connection authority and must also be in the qualified set.
@@ -63,7 +63,8 @@ The actor also owns:
 - monotonically increasing request ID;
 - pending request continuations;
 - process generation;
-- a bounded retired-ID ledger for late/duplicate responses.
+- the monotonic request-ID invariant used to discard late/duplicate responses without a tombstone
+  retention cap.
 
 Connection establishment is single-flight but cancellation is waiter-local. Each caller gets a
 separate waiter identity. Exactly one initialize effect runs, and the actor commits `connected(info)`
@@ -77,13 +78,26 @@ uses a local-only cancellation policy. Ordinary tool requests still send the can
 notification when they are cancelled or time out.
 
 A generation change makes output from an old process stale. A request ID is retired when the
-request completes, fails, times out, or is cancelled. Late or duplicate responses for retired IDs
-are discarded rather than mutating the current connection. An unknown, non-retired response ID is
-still a protocol failure.
+request completes, fails, times out, or is cancelled. Because IDs are strictly positive,
+monotonically increasing, and never reused, a late or duplicate response whose ID is lower than the
+next allocation is discarded without retaining an unbounded tombstone set. An unknown or future
+response ID is still a protocol failure.
 
 Shutdown owns the child-process effect to completion: close stdin, wait briefly for graceful exit,
 then TERM, wait again, and finally KILL if necessary. Process generation prevents any late output
 from an older bridge from committing new state.
+
+## Deadlines and I/O policy
+
+`MCPXcodeConfiguration.requestTimeout` defaults to `.zero`: this disables the SDK deadline and
+does not impose an arbitrary cutoff on a long-running Xcode operation such as `BuildProject`. A
+caller can still cancel the task, close the client, or provide an explicit positive timeout when an
+application-level deadline is required.
+
+`MCPXcodeConfiguration.ioLimits` is a host-configurable safety policy. The relaxed default permits
+64 MiB frames and JSON documents, 32 MiB strings, and 16 KiB read chunks. These limits protect the
+host from accidental resource exhaustion; they are not MCP protocol limits. MCP defines no fixed
+16 MiB stdio maximum, so a host that expects larger Xcode results can raise the limits explicitly.
 
 Dependency direction is one-way:
 
@@ -102,7 +116,9 @@ paths without teaching the production adapter any generic legacy behavior:
 - cancellation of one connection waiter while another survives;
 - initialize cancellation and timeout remaining local-only;
 - ordinary tool cancellation notifying the peer;
-- duplicate/late response retirement;
+- duplicate/late responses, including one arriving after more than 256 later requests;
+- complete handshakes for every qualified revision and negotiation to an older supported revision;
+- preservation of legacy `content` when `structuredContent` is absent;
 - bridge exit followed by a fresh process generation;
 - cancellation followed immediately by a new connect while the retired process is still stopping;
 - reconnect while an old process has closed stdout but has not exited yet.
@@ -110,7 +126,9 @@ paths without teaching the production adapter any generic legacy behavior:
 These fixtures are deterministic qualification assets. A separate opt-in live qualification test
 uses a test-only transparent stdio proxy to run the production `MCPXcodeClient` against the real
 `/usr/bin/xcrun mcpbridge` and retain a raw JSONL transcript. See `XcodeQualification.md`. Real Xcode
-qualification still requires macOS with the target Xcode release.
+qualification still requires macOS with the target Xcode release. This workspace has live evidence
+for Xcode 26.6; an actual Xcode 26.3 runtime qualification remains explicitly `NOT_PROVEN` on this
+machine.
 
 ## Result fidelity
 
@@ -127,8 +145,11 @@ payload that does not satisfy the declared schema.
 
 No support is added for generic legacy MCP, HTTP+SSE, session headers, batching, ping keepalives,
 legacy resource subscriptions, `logging/setLevel`, server-originated sampling/roots/elicitation, or
-revision downgrade heuristics. If Xcode later requires one of those operations, it must be justified
-by Xcode-specific evidence before this boundary expands.
+revision downgrade heuristics. Official initialization negotiation is trusted: the configured
+revision is sent once and a supported revision returned by Xcode is accepted. Automatic retries
+are intentionally absent because forcing an older revision can initialize successfully and then
+leave Xcode's bridge wedged at `tools/list` until Xcode is restarted. If Xcode later requires one
+of those operations, it must be justified by Xcode-specific evidence before this boundary expands.
 
 ## References
 

@@ -387,9 +387,11 @@ final class MCPModelTests: XCTestCase {
     XCTAssertThrowsError(try MCPCallToolResult(json: input))
   }
 
-  func testIconSourceRejectsSchemesOutsideHTTPSAndData() throws {
+  func testIconSourceAcceptsHTTPHTTPSAndDataAndRejectsUnsafeSchemes() throws {
+    try assertRoundTrip(try MCPIcon(source: "http://example.com/icon.png", mimeType: "image/png"))
     try assertRoundTrip(try MCPIcon(source: "https://example.com/icon.png", mimeType: "image/png"))
     try assertRoundTrip(try MCPIcon(source: "data:image/png;base64,AAAA"))
+    XCTAssertNoThrow(try MCPIcon(source: "HTTP://example.com/icon.png"))
     // Scheme comparison is case-insensitive per RFC 3986.
     XCTAssertNoThrow(try MCPIcon(source: "HTTPS://example.com/icon.png"))
 
@@ -400,7 +402,6 @@ final class MCPModelTests: XCTestCase {
       "file:///etc/passwd",
       "ftp://example.com/icon.png",
       "ws://example.com/icon.png",
-      "http://example.com/icon.png",
       "myapp://open",
       "//example.com/icon.png",
       "example.com/icon.png",

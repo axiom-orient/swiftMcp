@@ -175,12 +175,12 @@ public struct MCPIcon: Sendable, Hashable, MCPJSONModel {
   }
 
   /// MCP requires icon consumers to reject sources that use unsafe schemes such as `javascript:`,
-  /// `file:`, `ftp:`, `ws:`, or a local application scheme. Rejecting them here keeps a hostile
-  /// server from handing an executable or local-file URI to an unsuspecting host application.
+  /// `file:`, `ftp:`, `ws:`, or a local application scheme. The model accepts HTTP, HTTPS, and
+  /// data URI forms; a host remains responsible for trust, fetching, and rendering policy.
   ///
   /// An allowed scheme is necessary but not sufficient. A bare `data:text/html,<script>…` carries
   /// the `data:` scheme yet renders as markup in any host that loads the source into a web view,
-  /// so the payload's media type is checked too; and a bare `https:` or `https:foo` names no host,
+  /// so the payload's media type is checked too; and a bare `http:`/`https:` or `http:foo` names no host,
   /// leaving the reference for a renderer to resolve against whatever base URL it happens to hold.
   /// Both forms are rejected here rather than left for each consumer to rediscover.
   ///
@@ -199,32 +199,32 @@ public struct MCPIcon: Sendable, Hashable, MCPJSONModel {
 
     let bytes = Array(value.utf8)
     guard let first = bytes.first, isASCIIAlpha(first) else {
-      throw reject("icon source must be an https: or data: URI")
+      throw reject("icon source must be an http:, https:, or data: URI")
     }
     var index = 1
     while index < bytes.count {
       let byte = bytes[index]
       if byte == 0x3A { break }
       guard isASCIIAlphanumeric(byte) || byte == 0x2B || byte == 0x2D || byte == 0x2E else {
-        throw reject("icon source must be an https: or data: URI")
+        throw reject("icon source must be an http:, https:, or data: URI")
       }
       index += 1
     }
     guard index < bytes.count, bytes[index] == 0x3A else {
-      throw reject("icon source must be an https: or data: URI")
+      throw reject("icon source must be an http:, https:, or data: URI")
     }
     let scheme = String(decoding: bytes[..<index], as: UTF8.self).lowercased()
     let remainder = String(decoding: bytes[bytes.index(after: index)...], as: UTF8.self)
 
     switch scheme {
-    case "https":
+    case "http", "https":
       guard remainder.hasPrefix("//") else {
-        throw reject("https icon source must be absolute with an authority")
+        throw reject("http(s) icon source must be absolute with an authority")
       }
       let authority = remainder.dropFirst(2).prefix { $0 != "/" && $0 != "?" && $0 != "#" }
       // `userinfo@host` is legal but only serves to disguise the host it resolves to.
       guard !authority.isEmpty, !authority.contains("@") else {
-        throw reject("https icon source must name a host")
+        throw reject("http(s) icon source must name a host")
       }
     case "data":
       guard let comma = remainder.firstIndex(of: ",") else {
@@ -236,7 +236,7 @@ public struct MCPIcon: Sendable, Hashable, MCPJSONModel {
         throw reject("data icon source must declare an image/* media type")
       }
     default:
-      throw reject("icon source must be an https: or data: URI")
+      throw reject("icon source must be an http:, https:, or data: URI")
     }
   }
 

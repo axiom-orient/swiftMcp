@@ -1,6 +1,6 @@
 # Xcode MCP live qualification
 
-`MCPXcode` supports only Apple's external-agent `xcrun mcpbridge` tools surface. A revision is
+`MCPXcode` supports Apple's external-agent `xcrun mcpbridge` tools surface on Xcode 26.3+. A revision is
 qualified only after the production `MCPXcodeClient` completes this exact path against a real Xcode:
 
 ```text
@@ -37,10 +37,23 @@ MCP_XCODE_TRANSCRIPT_PATH="$PWD/../xcode-27-mcpbridge.jsonl" \
 swift test --filter MCPXcodeTests/testLiveXcodeQualificationWhenExplicitlyEnabled
 ```
 
-For an older qualified Xcode, explicitly pin the observed revision instead of enabling downgrade:
+For Xcode 26.3, explicitly pin its qualified revision:
 
 ```bash
-MCP_XCODE_PROTOCOL_REVISION=2025-03-26   # qualified Xcode 26.x profile when required
+MCP_XCODE_PROTOCOL_REVISION=2024-11-05
+```
+
+For Xcode 26.6, either currently qualified revision may be used:
+
+```bash
+MCP_XCODE_PROTOCOL_REVISION=2025-03-26
+# or 2025-06-18
+```
+
+Pin the revision that matches the target Xcode instead of enabling an automatic downgrade:
+
+```bash
+MCP_XCODE_PROTOCOL_REVISION=2024-11-05   # Xcode 26.3
 ```
 
 The test launches a test-only transparent proxy, which launches `/usr/bin/xcrun mcpbridge`. The
@@ -63,3 +76,15 @@ A transcript is accepted only when all of these are true:
 Retain one transcript per qualified Xcode build. If a future Xcode fails this gate, record the
 failure first and change `MCPXcode` only when the transcript demonstrates the smallest necessary
 Xcode-specific delta.
+
+The current workspace has live qualification evidence for Xcode 26.6 (17F113), macOS 26.6.2, for
+both `2025-03-26` and `2025-06-18`. Actual runtime qualification on Xcode 26.3 is `NOT_PROVEN` on
+this machine; the 26.3 support claim is based on Apple's Xcode 26.3 introduction and the qualified
+`2024-11-05` mock/source handshake. Do not infer 26.3 runtime success from a 26.6 transcript.
+The retained 26.6 evidence and transcript digests are recorded in
+[`XcodeQualificationEvidence-20260903.md`](XcodeQualificationEvidence-20260903.md).
+
+The client defaults to `requestTimeout: .zero`, which disables the SDK request deadline so
+long-running operations can complete. Supply a positive `requestTimeout` or cancel the task when
+the host needs a deadline. Its default `ioLimits` are a configurable SDK safety policy (64 MiB
+frame/document, 32 MiB string), not an MCP protocol maximum.

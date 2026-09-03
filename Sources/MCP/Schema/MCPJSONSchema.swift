@@ -155,9 +155,10 @@ private struct MCPOpaqueJSONSchemaValidationPlan: MCPJSONSchemaValidationPlan, S
 /// Uses the built-in validator where its self-contained profile applies, while preserving tool
 /// schemas that require a host-provided dialect or external-reference resolver.
 ///
-/// This is an explicit host policy, not the runtime default. It continues to validate supported
-/// schemas, but treats a schema with an unsupported dialect or external
-/// reference as an opaque MCP payload. Hosts choosing it own the resulting validation gap.
+/// This is the runtime interoperability default. It continues to validate supported schemas, but
+/// treats a schema with an unsupported dialect or external reference as an opaque MCP payload.
+/// No network retrieval is performed, so advertising a valid externally-referenced schema never
+/// becomes an implicit network or SSRF boundary.
 public struct MCPInteroperableJSONSchemaValidator: MCPJSONSchemaValidating, Sendable {
   private let builtIn: MCPJSONSchemaValidator
 

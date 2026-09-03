@@ -13,6 +13,11 @@ fails closed for any other revision.
 then add exactly that revision if the existing four-operation surface remains sufficient. Do not
 add a generic legacy negotiation layer.
 
+Support floor: `MCPXcode` targets Xcode 26.3+ because Apple external-agent MCP support starts in
+Xcode 26.3. The current machine has Xcode 26.6 (17F113), so actual Xcode 26.3 runtime
+qualification is `NOT_PROVEN` here. Source/mock coverage includes `2024-11-05`, the qualified
+26.3 revision.
+
 ## Xcode 26.3 omits `structuredContent`
 
 Observed Xcode 26.3 `mcpbridge` responses can return JSON serialized as text in `content` while
