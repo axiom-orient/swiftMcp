@@ -38,12 +38,12 @@ validator when it needs local validation for those schemas.
 
 ## Install
 
-Add SwiftMCP from GitHub with the current release tag `0.4.1`. This release includes the independent
+Add SwiftMCP from GitHub with the current release tag `0.4.2`. This release includes the independent
 `MCPTasks` product, strict stateless core, and the corrected Xcode 26.3+ edge.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.4.1")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.4.2")
 ]
 ```
 
@@ -225,7 +225,7 @@ metadata.
 5. Publish release notes from that tagged commit and use GitHub’s generated source archive rather
    than a workspace ZIP.
 
-Existing release tags `0.3.0`, `0.4.0`, and `0.4.1` are immutable. Future changes require a new
+Existing release tags `0.3.0`, `0.4.0`, `0.4.1`, and `0.4.2` are immutable. Future changes require a new
 semantic version; never retag an existing version.
 
 If a release must be withdrawn, stop distribution of the affected tag and direct consumers to the
@@ -234,3 +234,7 @@ last verified tag. Do not retag a different commit under the same version.
 ## License
 
 SwiftMCP is released under the [MIT License](LICENSE).
+
+## GitHub 배포 분류
+
+swiftMcp의 주 제품은 개발자가 import해 MCP client·server를 구성하는 Swift SDK이므로 canonical 조직은 [`axiom-orient`](https://github.com/axiom-orient)다. conformance executable은 패키지 검증과 예제를 위한 보조 표면이다.

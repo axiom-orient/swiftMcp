@@ -38,12 +38,12 @@ validator를 명시적으로 주입할 수 있습니다.
 
 ## 설치
 
-GitHub에서는 현재 릴리스 태그 `0.4.1`을 사용합니다. 이 릴리스에는 독립적인 `MCPTasks`, strict
+GitHub에서는 현재 릴리스 태그 `0.4.2`를 사용합니다. 이 릴리스에는 독립적인 `MCPTasks`, strict
 stateless core, 수정된 Xcode 26.3+ edge가 함께 포함됩니다.
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.4.1")
+  .package(url: "https://github.com/axiom-orient/swiftMcp.git", from: "0.4.2")
 ]
 ```
 
@@ -223,7 +223,7 @@ SWIFT_BUILD_JOBS=1 ./Scripts/verify.sh
 5. 태그를 만든 commit에서 release note를 작성하고, 작업 공간 ZIP 대신 GitHub가 생성한 source archive를
    사용합니다.
 
-기존 릴리스 tag `0.3.0`, `0.4.0`, `0.4.1`은 변경하지 않습니다. 이후 변경은 새 semantic
+기존 릴리스 tag `0.3.0`, `0.4.0`, `0.4.1`, `0.4.2`는 변경하지 않습니다. 이후 변경은 새 semantic
 version을 사용해야 하며, 어느 기존 버전도 다시 tag하지 마세요.
 
 배포를 철회해야 하면 영향을 받는 tag의 배포를 중단하고, 마지막으로 검증한 tag를 안내합니다. 같은
@@ -232,3 +232,7 @@ version을 사용해야 하며, 어느 기존 버전도 다시 tag하지 마세�
 ## 라이선스
 
 SwiftMCP는 [MIT License](LICENSE)로 배포됩니다.
+
+## GitHub 배포 분류
+
+swiftMcp의 주 제품은 개발자가 import해 MCP client·server를 구성하는 Swift SDK이므로 canonical 조직은 [`axiom-orient`](https://github.com/axiom-orient)입니다. conformance executable은 패키지 검증과 예제를 위한 보조 표면입니다.
