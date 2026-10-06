@@ -186,7 +186,7 @@
     let continuation: AsyncThrowingStream<[String: MCPJSONValue], Error>.Continuation
   }
 
-  private enum MCPXcodeCancellationPolicy: Sendable {
+  enum MCPXcodeCancellationPolicy: Sendable {
     case notifyPeer
     case localOnly
   }
@@ -412,12 +412,14 @@
       }
     }
 
-    private func request(
+    func request(
       method: String,
       params: [String: MCPJSONValue],
       requiresConnection: Bool = true,
       cancellationPolicy: MCPXcodeCancellationPolicy = .notifyPeer
     ) async throws -> [String: MCPJSONValue] {
+      // A caller may resume after its earlier connect while termination is already being drained.
+      if let exitStatus { throw MCPXcodeError.processExited(exitStatus) }
       if requiresConnection {
         guard case .connected = lifecycle else { throw MCPXcodeError.notConnected }
       }

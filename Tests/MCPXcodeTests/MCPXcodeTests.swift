@@ -299,6 +299,52 @@
       }
     }
 
+    func testResumedRequestRejectsObservedExitBeforeWriting() async throws {
+      let entered = AsyncStream<Void>.makeStream()
+      let release = AsyncStream<Void>.makeStream()
+      let client = try makeClient(
+        mode: "exit-after-notification",
+        toolsChangedHandler: {
+          entered.continuation.yield(())
+          var iterator = release.stream.makeAsyncIterator()
+          _ = await iterator.next()
+        }
+      )
+      let pending = Task { try await client.listTools() }
+      var notification = entered.stream.makeAsyncIterator()
+      _ = await notification.next()
+      var observedExit = false
+      for _ in 0..<50 {
+        do { _ = try await client.connect() } catch let error as MCPXcodeError {
+          if case .processExited(0) = error {
+            observedExit = true
+            break
+          }
+        }
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertTrue(observedExit, "the real mock process must exit before the resumed request")
+      // Exercise the continuation after its earlier connect completed, without rechecking connect.
+      // The stdout reader still holds an existing final response behind the notification handler.
+      do {
+        _ = try await client.request(method: "tools/list", params: [:])
+        XCTFail("request wrote after an observed bridge exit")
+      } catch let error as MCPXcodeError {
+        if case .processExited(0) = error {} else { XCTFail("unexpected error: \(error)") }
+      }
+      release.continuation.yield(())
+      release.continuation.finish()
+      entered.continuation.finish()
+      do {
+        let tools = try await pending.value
+        XCTAssertEqual(tools.tools.map(\.name), ["XcodeListWindows"])
+        await client.close()
+      } catch {
+        await client.close()
+        throw error
+      }
+    }
+
     func testExitDrainHasBoundWithoutRequestDeadline() async throws {
       let client = try makeClient(
         mode: "exit-after-notification", timeout: .zero,

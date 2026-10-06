@@ -94,7 +94,8 @@ connections from tool calls are rejected thereafter. The SDK never replays a req
 of Xcode identity, effect authorization and recovery remain caller responsibilities.
 
 Process termination does not retire the generation before stdout can deliver buffered responses.
-The actor records the exit status, rejects new connections/requests to that dead bridge, and waits
+The actor records the exit status, rejects new connections and checks it again before allocating or
+writing a request, including callers resuming after an earlier connect. It waits
 for EOF with a one-second drain bound. EOF or the bound commits the existing stopping transition;
 explicit close and transport failures may stop sooner. This bound applies only after the bridge
 has exited, not to a running Xcode operation.
@@ -133,6 +134,7 @@ paths without teaching the production adapter any generic legacy behavior:
 - preservation of legacy `content` when `structuredContent` is absent;
 - bridge exit followed by a fresh process generation;
 - final response buffered behind a notification when termination arrives first;
+- resumed requests rejecting observed termination before writing while existing responses still drain;
 - bounded stdout drain with the request deadline disabled;
 - single-connection policy rejecting explicit and implicit reconnect without a second launch;
 - cancellation followed immediately by a new connect while the retired process is still stopping;
