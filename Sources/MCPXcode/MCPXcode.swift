@@ -130,6 +130,9 @@
     public let ioLimits: MCPXcodeIOLimits
     public let diagnosticHandler: (@Sendable (String) async -> Void)?
     public let toolsChangedHandler: (@Sendable () async -> Void)?
+    /// Whether a later call may establish a fresh bridge after teardown. No request is replayed.
+    /// Set false when this client must remain bound to a single caller-selected connection.
+    public let allowsReconnect: Bool
 
     public init(
       executableURL: URL = URL(fileURLWithPath: "/usr/bin/xcrun"),
@@ -141,7 +144,8 @@
       requestTimeout: Duration = .zero,
       ioLimits: MCPXcodeIOLimits = .default,
       diagnosticHandler: (@Sendable (String) async -> Void)? = nil,
-      toolsChangedHandler: (@Sendable () async -> Void)? = nil
+      toolsChangedHandler: (@Sendable () async -> Void)? = nil,
+      allowsReconnect: Bool = true
     ) throws {
       guard requestTimeout >= .zero else {
         throw MCPJSONError.invalidField(
@@ -160,6 +164,7 @@
       self.ioLimits = ioLimits
       self.diagnosticHandler = diagnosticHandler
       self.toolsChangedHandler = toolsChangedHandler
+      self.allowsReconnect = allowsReconnect
     }
   }
 
@@ -210,6 +215,8 @@
     private let stdioLimits: MCPStdioLimits
     private var processBox: MCPXcodeProcessBox?
     private var writer: MCPStdioWriter?
+    private var exitDrainTask: Task<Void, Never>?
+    private var exitStatus: Int32?
     private var generation: UInt64 = 0
 
     private var nextRequestID: Int64 = 1
@@ -226,6 +233,8 @@
     }
 
     public func connect() async throws -> MCPXcodeConnectionInfo {
+      // Existing responses may drain after termination, but new requests cannot use the dead bridge.
+      if let exitStatus { throw MCPXcodeError.processExited(exitStatus) }
       switch lifecycle {
       case .connected(let info):
         return info
@@ -737,6 +746,19 @@
 
     private func processExited(generation: UInt64, status: Int32) {
       guard generation == self.generation else { return }
+      guard exitDrainTask == nil else { return }
+      exitStatus = status
+      // Process termination and stdout EOF arrive independently. Keep the generation alive so the
+      // reader can deliver already-written responses; bound the wait if a pipe or handler stalls.
+      exitDrainTask = Task { [weak self] in
+        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        guard let self else { return }
+        await self.exitDrainExpired(generation: generation, status: status)
+      }
+    }
+
+    private func exitDrainExpired(generation: UInt64, status: Int32) {
+      guard generation == self.generation else { return }
       _ = startStop(failure: MCPXcodeError.processExited(status))
     }
 
@@ -744,6 +766,7 @@
       guard generation == self.generation else { return }
       _ = startStop(
         failure: error.map { MCPXcodeError.transport(String(describing: $0)) }
+          ?? exitStatus.map { MCPXcodeError.processExited($0) }
           ?? MCPXcodeError.transport("Xcode MCP stdout ended"))
     }
 
@@ -780,12 +803,13 @@
     /// New connect callers can queue while the effect is running but cannot attach to the retired attempt.
     @discardableResult
     private func startStop(failure: Error, closeAfterStop: Bool = false) -> UInt64? {
+      let mustClose = closeAfterStop || !configuration.allowsReconnect
       switch lifecycle {
       case .closed:
         return nil
 
       case .stopping(let stopID, let existingCloseAfterStop):
-        if closeAfterStop, !existingCloseAfterStop {
+        if mustClose, !existingCloseAfterStop {
           lifecycle = .stopping(stopID, closeAfterStop: true)
           failConnectionWaiters(with: MCPXcodeError.notConnected)
         }
@@ -797,7 +821,10 @@
 
       lifecycleTransitionID &+= 1
       let stopID = lifecycleTransitionID
-      lifecycle = .stopping(stopID, closeAfterStop: closeAfterStop)
+      exitDrainTask?.cancel()
+      exitDrainTask = nil
+      exitStatus = nil
+      lifecycle = .stopping(stopID, closeAfterStop: mustClose)
 
       connectTask?.cancel()
       connectTask = nil

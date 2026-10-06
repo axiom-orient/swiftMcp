@@ -29,6 +29,7 @@
       let configuration = try MCPXcodeConfiguration(implementation: implementation)
 
       XCTAssertEqual(configuration.requestTimeout, .zero)
+      XCTAssertTrue(configuration.allowsReconnect)
       XCTAssertEqual(configuration.ioLimits.maximumFrameBytes, 64 * 1024 * 1024)
       XCTAssertEqual(configuration.ioLimits.jsonLimits.maximumDocumentBytes, 64 * 1024 * 1024)
     }
@@ -283,6 +284,71 @@
       await client.close()
     }
 
+    func testExitPreservesResponseBufferedBehindNotification() async throws {
+      let client = try makeClient(
+        mode: "exit-after-notification",
+        toolsChangedHandler: { try? await Task.sleep(for: .milliseconds(200)) }
+      )
+      do {
+        let tools = try await client.listTools()
+        XCTAssertEqual(tools.tools.map(\.name), ["XcodeListWindows"])
+        await client.close()
+      } catch {
+        await client.close()
+        throw error
+      }
+    }
+
+    func testExitDrainHasBoundWithoutRequestDeadline() async throws {
+      let client = try makeClient(
+        mode: "exit-after-notification", timeout: .zero,
+        toolsChangedHandler: { try? await Task.sleep(for: .milliseconds(1400)) }
+      )
+      let clock = ContinuousClock()
+      let start = clock.now
+      do {
+        _ = try await client.listTools()
+        XCTFail("stalled stdout unexpectedly completed")
+      } catch let error as MCPXcodeError {
+        guard case .processExited(0) = error else {
+          await client.close()
+          return XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertGreaterThanOrEqual(start.duration(to: clock.now), .milliseconds(800))
+        XCTAssertLessThan(start.duration(to: clock.now), .seconds(3))
+      }
+      await client.close()
+    }
+
+    func testSingleConnectionPolicyRejectsExplicitAndImplicitReconnect() async throws {
+      let logURL = temporaryLogURL()
+      defer { try? FileManager.default.removeItem(at: logURL) }
+      let client = try makeClient(
+        mode: "close-stdout-after-list", logURL: logURL, allowsReconnect: false
+      )
+      let tools = try await client.listTools()
+      XCTAssertEqual(tools.tools.map(\.name), ["XcodeListWindows"])
+      try await waitForLogMarker("__stdout_closed__", at: logURL)
+      try await Task.sleep(for: .milliseconds(100))
+      for operation in ["connect", "list", "call"] {
+        do {
+          switch operation {
+          case "connect": _ = try await client.connect()
+          case "list": _ = try await client.listTools()
+          default: _ = try await client.callTool(name: "XcodeListWindows")
+          }
+          XCTFail("\(operation) reopened a single-connection client")
+        } catch let error as MCPXcodeError {
+          guard case .notConnected = error else {
+            await client.close()
+            return XCTFail("unexpected error: \(error)")
+          }
+        }
+      }
+      await client.close()
+      XCTAssertEqual(try logContents(logURL).components(separatedBy: "__launch__").count - 1, 1)
+    }
+
     func testBridgeExitAllowsFreshProcessGeneration() async throws {
       let client = try makeClient(mode: "exit-after-list")
       let first = try await client.listTools()
@@ -362,7 +428,9 @@
       logURL: URL? = nil,
       revision: MCPXcodeProtocolRevision = .v2025June18,
       preferredRevision: MCPXcodeProtocolRevision? = nil,
-      ioLimits: MCPXcodeIOLimits = .default
+      ioLimits: MCPXcodeIOLimits = .default,
+      toolsChangedHandler: (@Sendable () async -> Void)? = nil,
+      allowsReconnect: Bool = true
     ) throws -> MCPXcodeClient {
       guard
         let fixtureURL = Bundle.module.url(
@@ -387,7 +455,9 @@
         implementation: try MCPImplementation(name: "test-agent", version: "1.0.0"),
         preferredProtocolRevision: preferredRevision ?? revision,
         requestTimeout: timeout,
-        ioLimits: ioLimits
+        ioLimits: ioLimits,
+        toolsChangedHandler: toolsChangedHandler,
+        allowsReconnect: allowsReconnect
       )
       return MCPXcodeClient(configuration: configuration)
     }

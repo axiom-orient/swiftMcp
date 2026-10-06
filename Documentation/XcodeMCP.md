@@ -87,6 +87,18 @@ Shutdown owns the child-process effect to completion: close stdin, wait briefly 
 then TERM, wait again, and finally KILL if necessary. Process generation prevents any late output
 from an older bridge from committing new state.
 
+`MCPXcodeConfiguration.allowsReconnect` defaults to `true`, preserving the ability of a later
+caller to create a fresh bridge after teardown. Setting it to `false` makes every stop terminal
+for that client, including failed or abandoned initialization. Explicit `connect` and implicit
+connections from tool calls are rejected thereafter. The SDK never replays a request. Selection
+of Xcode identity, effect authorization and recovery remain caller responsibilities.
+
+Process termination does not retire the generation before stdout can deliver buffered responses.
+The actor records the exit status, rejects new connections/requests to that dead bridge, and waits
+for EOF with a one-second drain bound. EOF or the bound commits the existing stopping transition;
+explicit close and transport failures may stop sooner. This bound applies only after the bridge
+has exited, not to a running Xcode operation.
+
 ## Deadlines and I/O policy
 
 `MCPXcodeConfiguration.requestTimeout` defaults to `.zero`: this disables the SDK deadline and
@@ -120,6 +132,9 @@ paths without teaching the production adapter any generic legacy behavior:
 - complete handshakes for every qualified revision and negotiation to an older supported revision;
 - preservation of legacy `content` when `structuredContent` is absent;
 - bridge exit followed by a fresh process generation;
+- final response buffered behind a notification when termination arrives first;
+- bounded stdout drain with the request deadline disabled;
+- single-connection policy rejecting explicit and implicit reconnect without a second launch;
 - cancellation followed immediately by a new connect while the retired process is still stopping;
 - reconnect while an old process has closed stdout but has not exited yet.
 

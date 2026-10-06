@@ -59,6 +59,9 @@ while IFS= read -r line; do
     *'"method":"tools/list"'*)
       id="$(request_id "$line")"
       list_count=$((list_count + 1))
+      if [ "$mode" = "exit-after-notification" ]; then
+        printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+      fi
       printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"XcodeListWindows\",\"description\":\"Mock Xcode tool\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}"
       if [ "$mode" = "duplicate-list-response" ]; then
         printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"XcodeListWindows\",\"description\":\"Mock Xcode tool\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}"
@@ -68,7 +71,7 @@ while IFS= read -r line; do
         # A correct monotonic-ID implementation ignores this duplicate indefinitely.
         printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$initialize_id,\"result\":{\"protocolVersion\":\"$revision\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mock-xcode\",\"version\":\"1.0.0\"}}}"
       fi
-      if [ "$mode" = "exit-after-list" ]; then
+      if [ "$mode" = "exit-after-list" ] || [ "$mode" = "exit-after-notification" ]; then
         exit 0
       fi
       if [ "$mode" = "close-stdout-after-list" ]; then
